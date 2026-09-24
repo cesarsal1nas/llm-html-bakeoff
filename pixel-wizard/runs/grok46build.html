@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>grok46build</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background: #000;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+    touch-action: none;
+  }
+  canvas {
+    display: block;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    image-rendering: -moz-crisp-edges;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+  'use strict';
+
+  const W = 128;
+  const H = 96;
+  const DT = 1000 / 60;
+
+  const P = [
+    '#070611', '#121028', '#1c173c', '#2e2758',
+    '#8e8ab4', '#ece8fc', '#1a1730', '#3a3652',
+    '#140a1c', '#4a2158', '#6c3176', '#a050a8',
+    '#e8c4a0', '#c09070', '#f2eadc', '#a09078',
+    '#563a82', '#d4a040', '#4a3020', '#ffffff',
+    '#7ce0ff', '#3e86ff', '#c050ff', '#ff70d8'
+  ];
+
+  const SKY0 = 0, SKY1 = 1, SKY2 = 2, SKY3 = 3;
+  const MOON = 4, PALE = 5, FLOOR = 6, STONE = 7;
+  const OUT = 8, ROBED = 9, ROBE = 10, ROBEL = 11;
+  const SKIN = 12, SKIND = 13, BEARD = 14, BEARDD = 15;
+  const HAT = 16, GOLD = 17, WOOD = 18, WHITE = 19;
+  const CYAN = 20, BLUE = 21, VIOLET = 22, PINK = 23;
+
+  const CH = {
+    K: OUT, H: HAT, L: ROBEL, G: GOLD,
+    S: SKIN, s: SKIND, B: BEARD, b: BEARDD,
+    D: ROBED, R: ROBE, W: WOOD, w: SKIND
+  };
+
+  const SPRITE = [
+    '....KHHK................',
+    '...KHHHHK...............',
+    '..KH.HHHHK..............',
+    '.KHH.HHHHHLK............',
+    '.KHHHHHHHHHLK...........',
+    '.KHHHHHHHHHLK...........',
+    '.KHHGGGGGGHHLK..........',
+    '.KHHHHHHHHHHLK..........',
+    '.KHHHHHHHHHHHHHK........',
+    '..KSSSKSSSK.............',
+    '...KSSSSSSSK............',
+    '...KbBBBBBBBBK..........',
+    '..KbBBBBBBBBBbK.........',
+    '..KbbBBBBBBBBbK.........',
+    '.KbbbBBBBBBBbK..........',
+    '.KbbbbBBBBBBbK..........',
+    '.KDbbbBBBBBBbLK.........',
+    'KDDDbbBBBBBbLLK.........',
+    'KDDDDbBBBBbRLLK.........',
+    'KDDDDRRRRRRRLLK.........',
+    'KDDDDRRGGGRRLLK.........',
+    'KDDDDRRGGGRRLLK.........',
+    'KDDDDRRRRRRRLLLK........',
+    'KDDDDRRRRRRRRLLK........',
+    'KKDDDRRRRRRRRLLKK.......',
+    'KDDDDRRRRRRRLLLLK.......',
+    'KDDDDRRRRRRRRLLLKK......',
+    'KKDDDRRRRRRRLLLLK.......',
+    'KDDDDRRRRRRRRLLLK.......',
+    '.KDDDRRRRRRRRLLK........',
+    '.KKKssK....KssKK........',
+    '..KKKK......KKKK........'
+  ];
+
+  const MAX_RUN = 320;
+  const rY = new Uint8Array(MAX_RUN);
+  const rX = new Uint8Array(MAX_RUN);
+  const rW = new Uint8Array(MAX_RUN);
+  const rC = new Uint8Array(MAX_RUN);
+  let rN = 0;
+
+  for (let y = 0; y < SPRITE.length; y++) {
+    const row = SPRITE[y].padEnd(24, '.');
+    let x = 0;
+    while (x < 24) {
+      const ch = row.charAt(x);
+      if (ch === '.') { x++; continue; }
+      const c = CH[ch];
+      let x1 = x + 1;
+      while (x1 < 24 && row.charAt(x1) === ch) x1++;
+      rY[rN] = y;
+      rX[rN] = x;
+      rW[rN] = x1 - x;
+      rC[rN] = c;
+      rN++;
+      x = x1;
+    }
+  }
+
+  const STAR_N = 18;
+  const starX = new Uint8Array([3, 9, 16, 24, 38, 48, 63, 71, 78, 86, 93, 99, 117, 122, 126, 7, 81, 20]);
+  const starY = new Uint8Array([5, 14, 8, 22, 36, 11, 18, 9, 42, 21, 13, 7, 16, 4, 11, 48, 55, 33]);
+  const starPh = new Uint8Array([0, 3, 7, 2, 11, 5, 9, 1, 14, 6, 8, 4, 12, 10, 15, 3, 7, 13]);
+
+  const pebbleX = new Uint8Array([8, 9, 22, 41, 58, 59, 77, 96, 112, 121]);
+  const pebbleY = new Uint8Array([85, 86, 85, 86, 85, 86, 86, 85, 86, 85]);
+
+  const MAX_P = 96;
+  const px = new Float32Array(MAX_P);
+  const py = new Float32Array(MAX_P);
+  const pvx = new Float32Array(MAX_P);
+  const pvy = new Float32Array(MAX_P);
+  const plife = new Float32Array(MAX_P);
+  const pmax = new Float32Array(MAX_P);
+  const pkind = new Uint8Array(MAX_P);
+  const palive = new Uint8Array(MAX_P);
+  let pHead = 0;
+
+  const PCOL = [WHITE, WHITE, CYAN, BLUE, VIOLET, PINK, ROBEL, ROBED, OUT];
+
+  const IDLE = 0, CHARGE = 1, CAST = 2, RECOVER = 3;
+  const DUR = [108, 86, 52, 58];
+
+  const ANG_IDLE = 0.36;
+  const ANG_CHARGE = -0.22;
+  const ANG_CAST = 0.78;
+  const ARM_IDLE = 0.08;
+  const ARM_CHARGE = 1;
+  const ARM_CAST = 0.72;
+
+  let state = IDLE;
+  let stateT = 0;
+  let tick = 0;
+  let seed = 1;
+
+  let bob = 0, tilt = 0, sway = 0, beard = 0, arm = ARM_IDLE, ang = ANG_IDLE, rim = 0;
+  let dBob = 0, dTilt = 0, dSway = 0, dBeard = 0, dArm = 0, dAng = ANG_IDLE, dRim = 0;
+  let wizX = 30, wizY = 52, handX = 47, handY = 71, gemX = 54, gemY = 56;
+  let shake = 0, camx = 0, camy = 0;
+  let shot = 0, sx = 0, sy = 0, svx = 0, svy = 0, sx2 = 0, sy2 = 0;
+
+  const off = document.createElement('canvas');
+  off.width = W;
+  off.height = H;
+  const g = off.getContext('2d', { alpha: false });
+  g.imageSmoothingEnabled = false;
+
+  const scr = document.getElementById('c');
+  const sctx = scr.getContext('2d', { alpha: false });
+  let scale = 1;
+
+  let _fs = '';
+  function col(i) {
+    const s = P[i];
+    if (s !== _fs) {
+      g.fillStyle = s;
+      _fs = s;
+    }
+  }
+  function p(x, y, i) {
+    col(i);
+    g.fillRect(x, y, 1, 1);
+  }
+  function rect(x, y, w, h, i) {
+    col(i);
+    g.fillRect(x, y, w, h);
+  }
+  function hrun(x, y, w, i) {
+    col(i);
+    g.fillRect(x, y, w, 1);
+  }
+
+  function line(x0, y0, x1, y1, i) {
+    x0 = x0 | 0; y0 = y0 | 0; x1 = x1 | 0; y1 = y1 | 0;
+    let dx = x1 - x0; if (dx < 0) dx = -dx;
+    let dy = y1 - y0; if (dy < 0) dy = -dy;
+    const sxn = x0 < x1 ? 1 : -1;
+    const syn = y0 < y1 ? 1 : -1;
+    let err = dx - dy;
+    for (;;) {
+      p(x0, y0, i);
+      if (x0 === x1 && y0 === y1) break;
+      const e2 = err << 1;
+      if (e2 > -dy) { err -= dy; x0 += sxn; }
+      if (e2 < dx) { err += dx; y0 += syn; }
+    }
+  }
+
+  function rnd() {
+    seed = (Math.imul(seed, 1664525) + 1013904223) | 0;
+    return (seed >>> 0) / 4294967296;
+  }
+
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function clamp01(t) { return t < 0 ? 0 : t > 1 ? 1 : t; }
+  function smooth(t) { t = clamp01(t); return t * t * (3 - 2 * t); }
+  function easeOut(t) { t = clamp01(t); return 1 - (1 - t) * (1 - t); }
+
+  function spawn(x, y, vx, vy, life, kind) {
+    for (let n = 0; n < MAX_P; n++) {
+      const i = pHead;
+      pHead++;
+      if (pHead === MAX_P) pHead = 0;
+      if (!palive[i]) {
+        palive[i] = 1;
+        px[i] = x;
+        py[i] = y;
+        pvx[i] = vx;
+        pvy[i] = vy;
+        plife[i] = life;
+        pmax[i] = life;
+        pkind[i] = kind;
+        return;
+      }
+    }
+  }
+
+  function convertOrbits() {
+    for (let i = 0; i < MAX_P; i++) {
+      if (!palive[i] || pkind[i] !== 0) continue;
+      const x = gemX + Math.cos(px[i]) * py[i];
+      const y = gemY + Math.sin(px[i]) * py[i];
+      const dx = x - gemX;
+      const dy = y - gemY;
+      px[i] = x;
+      py[i] = y;
+      pvx[i] = dx * 0.18;
+      pvy[i] = dy * 0.18;
+      pkind[i] = 1;
+      plife[i] = 22;
+      pmax[i] = 22;
+    }
+  }
+
+  function burst(n, spd) {
+    for (let k = 0; k < n; k++) {
+      const a = (k / n) * 6.283185307179586 + rnd() * 0.2;
+      const sp = spd * (0.55 + rnd() * 0.75);
+      spawn(gemX, gemY, Math.cos(a) * sp, Math.sin(a) * sp, 18 + (k & 7), 1);
+    }
+  }
+
+  function enter(s) {
+    state = s;
+    stateT = 0;
+    if (s === CAST) {
+      shake = 14;
+      convertOrbits();
+      burst(28, 1.35);
+    }
+  }
+
+  function computePose() {
+    dBob = bob >= 0.5 ? 1 : 0;
+    dTilt = tilt < -0.5 ? -1 : tilt > 0.5 ? 1 : 0;
+    dSway = sway < -0.5 ? -1 : sway > 0.5 ? 1 : 0;
+    dBeard = beard < -0.5 ? -1 : beard > 0.5 ? 1 : 0;
+    dArm = Math.round(arm * 4) / 4;
+    dAng = Math.round(ang * 11) / 11;
+    dRim = rim < 0.5 ? 0 : rim < 1.4 ? 1 : 2;
+    wizX = 30;
+    wizY = 52 + dBob;
+    handX = wizX + 16 + (dArm * 3 | 0);
+    handY = wizY + 20 - (dArm * 11 | 0);
+    gemX = Math.round(handX + 1 + Math.sin(dAng) * 17);
+    gemY = Math.round(handY - Math.cos(dAng) * 17);
+  }
+
+  function update() {
+    tick++;
+    stateT++;
+    if (stateT >= DUR[state]) {
+      if (state === IDLE) enter(CHARGE);
+      else if (state === CHARGE) enter(CAST);
+      else if (state === CAST) enter(RECOVER);
+      else enter(IDLE);
+    }
+
+    if (state === IDLE) {
+      bob = 0.5 + 0.5 * Math.sin(tick * 0.5235987755982988);
+      beard = Math.sin(tick * 0.5235987755982988 + 1.3);
+      sway = Math.sin(tick * 0.19634954084936207);
+      tilt = 0;
+      arm = ARM_IDLE;
+      ang = ANG_IDLE + Math.sin(tick * 0.04) * 0.03;
+      rim = 0.25;
+    } else if (state === CHARGE) {
+      const t = smooth(stateT / DUR[CHARGE]);
+      bob = lerp(1, 0, t);
+      beard = lerp(beard, 0, 0.25);
+      sway = lerp(sway, 0, 0.25);
+      tilt = lerp(0, -1, t);
+      arm = lerp(ARM_IDLE, ARM_CHARGE, t);
+      ang = lerp(ANG_IDLE, ANG_CHARGE, t);
+      rim = lerp(0.25, 2, t);
+      if ((tick % 3) === 0) {
+        spawn(rnd() * 6.283185307179586, 8 + rnd() * 2.5, 0.17 + rnd() * 0.04, -0.15, 44, 0);
+      }
+    } else if (state === CAST) {
+      const t = easeOut(stateT / 8);
+      bob = 0;
+      beard = 0;
+      sway = lerp(sway, 1, 0.3);
+      tilt = lerp(-1, 1, t);
+      arm = lerp(ARM_CHARGE, ARM_CAST, t);
+      ang = lerp(ANG_CHARGE, ANG_CAST, t);
+      rim = 2;
+      if (stateT === 3) {
+        shot = 1;
+        sx = gemX;
+        sy = gemY;
+        sx2 = gemX;
+        sy2 = gemY;
+        svx = 2.4;
+        svy = -0.12;
+        burst(10, 0.7);
+      }
+      if (stateT < 8 && (tick & 1) === 0) {
+        spawn(gemX, gemY, (rnd() - 0.5) * 1.4, (rnd() - 0.5) * 1.4, 12, 1);
+      }
+    } else {
+      const t = smooth(stateT / DUR[RECOVER]);
+      bob = 0;
+      beard = lerp(0, 0, t);
+      sway = lerp(1, 0, t);
+      tilt = lerp(1, 0, t);
+      arm = lerp(ARM_CAST, ARM_IDLE, t);
+      ang = lerp(ANG_CAST, ANG_IDLE, t);
+      rim = lerp(2, 0.25, t);
+    }
+
+    computePose();
+
+    if (shake > 0) {
+      shake--;
+      camx = (tick & 1) ? 1 : -1;
+      camy = shake > 7 ? ((tick & 2) ? 1 : 0) : 0;
+    } else {
+      camx = 0;
+      camy = 0;
+    }
+
+    if (state === IDLE && (tick % 22) === 0) {
+      spawn(gemX + (rnd() < 0.5 ? -1 : 1), gemY - 1, 0, -0.15, 14, 1);
+    }
+
+    if (shot) {
+      sx2 = sx;
+      sy2 = sy;
+      sx += svx;
+      sy += svy;
+      if ((tick & 1) === 0) {
+        spawn(sx, sy, -0.35, (rnd() - 0.5) * 0.35, 10, 1);
+      }
+      if (sx > 124) {
+        shot = 0;
+        for (let k = 0; k < 12; k++) {
+          const a = rnd() * 6.283185307179586;
+          const sp = 0.4 + rnd() * 0.9;
+          spawn(124, sy, Math.cos(a) * sp, Math.sin(a) * sp, 16, 1);
+        }
+      }
+    }
+
+    for (let i = 0; i < MAX_P; i++) {
+      if (!palive[i]) continue;
+      plife[i] -= 1;
+      if (plife[i] <= 0) {
+        palive[i] = 0;
+        continue;
+      }
+      if (pkind[i] === 0) {
+        px[i] += pvx[i];
+        py[i] += pvy[i];
+        if (py[i] < 2.2) {
+          if (state === CHARGE) {
+            py[i] = 13;
+            plife[i] = pmax[i];
+          } else {
+            palive[i] = 0;
+          }
+        }
+      } else {
+        px[i] += pvx[i];
+        py[i] += pvy[i];
+        pvy[i] += 0.012;
+        pvx[i] *= 0.98;
+      }
+    }
+  }
+
+  function drawMoon(mx, my) {
+    for (let y = -7; y <= 7; y++) {
+      for (let x = -7; x <= 7; x++) {
+        const d = x * x + y * y;
+        if (d > 36 && d <= 54) p(mx + x, my + y, SKY3);
+      }
+    }
+    for (let y = -6; y <= 6; y++) {
+      for (let x = -6; x <= 6; x++) {
+        if (x * x + y * y <= 36) {
+          let c = PALE;
+          if (x < -2) c = MOON;
+          else if (x > 2 && y < 0) c = WHITE;
+          p(mx + x, my + y, c);
+        }
+      }
+    }
+    p(mx - 1, my - 2, MOON);
+    p(mx + 2, my + 1, MOON);
+    p(mx, my + 3, MOON);
+  }
+
+  function drawStars() {
+    for (let i = 0; i < STAR_N; i++) {
+      const ph = (tick + (starPh[i] << 3)) % 64;
+      if (ph < 6) continue;
+      const c = ph > 48 || ph < 14 ? PALE : MOON;
+      p(starX[i], starY[i], c);
+    }
+  }
+
+  function drawFloor() {
+    rect(0, 84, W, 1, STONE);
+    rect(0, 85, W, H - 85, FLOOR);
+    hrun(0, 85, W, SKY0);
+    for (let i = 0; i < pebbleX.length; i++) p(pebbleX[i], pebbleY[i], STONE);
+    hrun(14, 86, 3, STONE);
+    hrun(67, 87, 2, STONE);
+    hrun(103, 86, 4, OUT);
+    hrun(wizX + 6, 84, 11, OUT);
+  }
+
+  function drawWizard() {
+    for (let i = 0; i < rN; i++) {
+      const ly = rY[i];
+      let dx = 0;
+      if (ly <= 10) dx = dTilt;
+      else if (ly <= 18) dx = ly >= 14 ? dBeard : dTilt;
+      else if (ly >= 26) dx = dSway;
+      hrun(wizX + rX[i] + dx, wizY + ly, rW[i], rC[i]);
+    }
+
+    p(wizX + 8 + dTilt, wizY + 10, SKIND);
+    if (state === IDLE && (stateT % 186) < 7) {
+      p(wizX + 6 + dTilt, wizY + 9, SKIN);
+      p(wizX + 10 + dTilt, wizY + 9, SKIN);
+    }
+
+    const shx = wizX + 14;
+    const shy = wizY + 17;
+    line(shx, shy, handX, handY, OUT);
+    line(shx + 1, shy, handX + 1, handY, ROBED);
+    line(shx + 2, shy, handX + 1, handY - 1, ROBE);
+    if (dRim >= 1) line(shx + 2, shy - 1, handX + 2, handY - 1, ROBEL);
+
+    line(handX, handY, gemX, gemY, OUT);
+    line(handX + 1, handY, gemX + 1, gemY, WOOD);
+    line(handX + 1, handY - 1, gemX, gemY + 1, SKIND);
+    p(gemX, gemY + 2, GOLD);
+    p(gemX + 1, gemY + 2, GOLD);
+
+    rect(handX, handY, 2, 2, SKIN);
+    p(handX, handY + 1, SKIND);
+
+    if (dRim >= 1) {
+      p(wizX + 16 + dTilt, wizY + 5, ROBEL);
+      p(wizX + 16 + dTilt, wizY + 7, ROBEL);
+      p(wizX + 17, wizY + 16, ROBEL);
+      p(wizX + 17, wizY + 18, ROBEL);
+      p(wizX + 18 + dSway, wizY + 25, ROBEL);
+    }
+    if (dRim >= 2) {
+      p(wizX + 16 + dTilt, wizY + 4, CYAN);
+      p(wizX + 17 + dTilt, wizY + 8, CYAN);
+      p(wizX + 18, wizY + 15, CYAN);
+      p(wizX + 19 + dSway, wizY + 24, WHITE);
+      p(wizX + 13 + dBeard, wizY + 13, PALE);
+    }
+  }
+
+  function drawGem() {
+    const flicker = (tick % 6) < 3;
+    const core = (state === CAST && stateT < 10) || flicker ? WHITE : CYAN;
+    const armC = flicker ? VIOLET : PINK;
+    if (dRim >= 1) {
+      p(gemX - 2, gemY, BLUE);
+      p(gemX + 2, gemY, BLUE);
+      p(gemX, gemY - 2, BLUE);
+      p(gemX, gemY + 2, BLUE);
+    }
+    p(gemX - 1, gemY, armC);
+    p(gemX + 1, gemY, armC);
+    p(gemX, gemY - 1, armC);
+    p(gemX, gemY + 1, armC);
+    p(gemX, gemY, core);
+    if (state === CAST && stateT < 8) {
+      p(gemX - 3, gemY, WHITE);
+      p(gemX + 3, gemY, WHITE);
+      p(gemX, gemY - 3, WHITE);
+      p(gemX, gemY + 3, WHITE);
+      p(gemX - 2, gemY - 2, CYAN);
+      p(gemX + 2, gemY - 2, CYAN);
+      p(gemX - 2, gemY + 2, CYAN);
+      p(gemX + 2, gemY + 2, CYAN);
+    }
+  }
+
+  function drawParticles() {
+    for (let i = 0; i < MAX_P; i++) {
+      if (!palive[i]) continue;
+      const t = 1 - plife[i] / pmax[i];
+      let ci = (t * (PCOL.length - 0.01)) | 0;
+      if (ci < 0) ci = 0;
+      if (ci >= PCOL.length) ci = PCOL.length - 1;
+      let x, y;
+      if (pkind[i] === 0) {
+        x = gemX + Math.cos(px[i]) * py[i];
+        y = gemY + Math.sin(px[i]) * py[i];
+      } else {
+        x = px[i];
+        y = py[i];
+      }
+      p(Math.round(x), Math.round(y), PCOL[ci]);
+    }
+  }
+
+  function drawShot() {
+    if (!shot) return;
+    const x = Math.round(sx);
+    const y = Math.round(sy);
+    const x0 = Math.round(sx2);
+    const y0 = Math.round(sy2);
+    line(x0, y0, x, y, CYAN);
+    p(x, y, WHITE);
+    p(x - 1, y, CYAN);
+    p(x + 1, y, CYAN);
+    p(x, y - 1, CYAN);
+    p(x, y + 1, VIOLET);
+    p(x + 2, y, PINK);
+  }
+
+  function render() {
+    _fs = '';
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    rect(0, 0, W, H, SKY0);
+    g.setTransform(1, 0, 0, 1, camx, camy);
+    rect(0, 0, W, H, SKY0);
+    rect(0, 81, W, 3, SKY1);
+    drawStars();
+    drawMoon(108, 14);
+    drawFloor();
+    drawWizard();
+    drawParticles();
+    drawGem();
+    drawShot();
+
+    sctx.imageSmoothingEnabled = false;
+    if (sctx.mozImageSmoothingEnabled !== undefined) sctx.mozImageSmoothingEnabled = false;
+    if (sctx.webkitImageSmoothingEnabled !== undefined) sctx.webkitImageSmoothingEnabled = false;
+    sctx.drawImage(off, 0, 0, W, H, 0, 0, W * scale, H * scale);
+  }
+
+  function fit() {
+    const s = Math.max(1, Math.min(
+      Math.floor(window.innerWidth / W),
+      Math.floor(window.innerHeight / H)
+    ) | 0);
+    scale = s;
+    scr.width = W * s;
+    scr.height = H * s;
+    sctx.imageSmoothingEnabled = false;
+    if (sctx.mozImageSmoothingEnabled !== undefined) sctx.mozImageSmoothingEnabled = false;
+    if (sctx.webkitImageSmoothingEnabled !== undefined) sctx.webkitImageSmoothingEnabled = false;
+  }
+
+  window.addEventListener('resize', fit);
+  fit();
+  computePose();
+  {
+    const q = location.search;
+    const idx = q.indexOf('t=');
+    if (idx >= 0) {
+      const skipN = parseInt(q.slice(idx + 2), 10) | 0;
+      for (let i = 0; i < skipN; i++) update();
+    }
+  }
+
+  let acc = 0;
+  let last = performance.now();
+  function frame(now) {
+    acc += now - last;
+    last = now;
+    if (acc > 200) acc = 200;
+    while (acc >= DT) {
+      update();
+      acc -= DT;
+    }
+    render();
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

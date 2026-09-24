@@ -1,0 +1,808 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>grok45hermes</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #0a0612;
+  }
+  canvas#display {
+    display: block;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+  }
+</style>
+</head>
+<body>
+<canvas id="display"></canvas>
+<script>
+(function () {
+  "use strict";
+
+  // ---------------------------------------------------------------------------
+  // Fixed logical resolution + display blit
+  // ---------------------------------------------------------------------------
+  var LW = 128;
+  var LH = 96;
+
+  var off = document.createElement("canvas");
+  off.width = LW;
+  off.height = LH;
+  var ctx = off.getContext("2d", { alpha: false });
+  ctx.imageSmoothingEnabled = false;
+
+  var display = document.getElementById("display");
+  var dctx = display.getContext("2d", { alpha: false });
+  dctx.imageSmoothingEnabled = false;
+
+  var scale = 1;
+  var shakeX = 0;
+  var shakeY = 0;
+
+  function resize() {
+    var sx = Math.floor(window.innerWidth / LW);
+    var sy = Math.floor(window.innerHeight / LH);
+    scale = Math.max(1, Math.min(sx, sy));
+    display.width = LW * scale;
+    display.height = LH * scale;
+    dctx.imageSmoothingEnabled = false;
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  // ---------------------------------------------------------------------------
+  // Fixed palette (~24 colors) — every pixel comes from here
+  // ---------------------------------------------------------------------------
+  var P = {
+    sky0:  "#0a0612",
+    sky1:  "#120a1e",
+    sky2:  "#1a0f2e",
+    moon:  "#c8c0e0",
+    moon2: "#8a8498",
+    star:  "#e8e0f8",
+    star2: "#686078",
+    floor: "#2a2438",
+    floor2:"#1c1828",
+    stone: "#3a3450",
+    hat:   "#2a1848",
+    hat2:  "#1a0c30",
+    hatHi: "#3c2860",
+    skin:  "#d8a888",
+    skin2: "#a87858",
+    beard: "#d0c8d8",
+    beard2:"#9890a0",
+    robe:  "#4a3060",
+    robe2: "#342048",
+    robe3: "#5c4078",
+    staff: "#5a4030",
+    staff2:"#3a2818",
+    gem:   "#40f0ff",
+    gem2:  "#2080e0",
+    gem3:  "#80ffff",
+    magW:  "#f8f8ff",
+    magA:  "#a0f0ff",
+    magB:  "#60a0ff",
+    magC:  "#c060ff",
+    magD:  "#6020a0",
+    magE:  "#301060",
+    rim:   "#70d0ff",
+    black: "#000000"
+  };
+
+  // Particle palette ramp (white -> magic -> dark)
+  var PART_COLORS = [P.magW, P.gem3, P.gem, P.magA, P.magB, P.magC, P.magD, P.magE];
+
+  // ---------------------------------------------------------------------------
+  // Helpers — integer-only drawing
+  // ---------------------------------------------------------------------------
+  function fillRect(x, y, w, h, c) {
+    ctx.fillStyle = c;
+    ctx.fillRect(x | 0, y | 0, w | 0, h | 0);
+  }
+
+  function px(x, y, c) {
+    ctx.fillStyle = c;
+    ctx.fillRect(x | 0, y | 0, 1, 1);
+  }
+
+  function hrun(x, y, n, c) {
+    ctx.fillStyle = c;
+    ctx.fillRect(x | 0, y | 0, n | 0, 1);
+  }
+
+  function vrun(x, y, n, c) {
+    ctx.fillStyle = c;
+    ctx.fillRect(x | 0, y | 0, 1, n | 0);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Stars (fixed positions, twinkle via palette swap)
+  // ---------------------------------------------------------------------------
+  var STAR_N = 28;
+  var starX = new Int16Array(STAR_N);
+  var starY = new Int16Array(STAR_N);
+  var starPhase = new Float32Array(STAR_N);
+  var starSpeed = new Float32Array(STAR_N);
+  (function initStars() {
+    // Deterministic pseudo-random so layout is stable
+    var s = 12345;
+    function rnd() {
+      s = (s * 1103515245 + 12345) & 0x7fffffff;
+      return s / 0x7fffffff;
+    }
+    for (var i = 0; i < STAR_N; i++) {
+      starX[i] = (rnd() * LW) | 0;
+      starY[i] = (rnd() * 58) | 0;
+      starPhase[i] = rnd() * Math.PI * 2;
+      starSpeed[i] = 0.8 + rnd() * 2.2;
+    }
+  })();
+
+  // ---------------------------------------------------------------------------
+  // Particle pool — preallocated, zero alloc in loop
+  // ---------------------------------------------------------------------------
+  var PART_MAX = 96;
+  var pAlive = new Uint8Array(PART_MAX);
+  var pX = new Float32Array(PART_MAX);
+  var pY = new Float32Array(PART_MAX);
+  var pVX = new Float32Array(PART_MAX);
+  var pVY = new Float32Array(PART_MAX);
+  var pLife = new Float32Array(PART_MAX);
+  var pMaxLife = new Float32Array(PART_MAX);
+  var pKind = new Uint8Array(PART_MAX); // 0=spark orbit, 1=burst, 2=trail
+  var pAngle = new Float32Array(PART_MAX);
+  var pRadius = new Float32Array(PART_MAX);
+  var pSpin = new Float32Array(PART_MAX);
+
+  function spawnParticle(kind, x, y, vx, vy, life, angle, radius, spin) {
+    for (var i = 0; i < PART_MAX; i++) {
+      if (!pAlive[i]) {
+        pAlive[i] = 1;
+        pX[i] = x;
+        pY[i] = y;
+        pVX[i] = vx;
+        pVY[i] = vy;
+        pLife[i] = life;
+        pMaxLife[i] = life;
+        pKind[i] = kind;
+        pAngle[i] = angle || 0;
+        pRadius[i] = radius || 0;
+        pSpin[i] = spin || 0;
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  function clearParticles() {
+    for (var i = 0; i < PART_MAX; i++) pAlive[i] = 0;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Projectile (single, reused)
+  // ---------------------------------------------------------------------------
+  var projAlive = 0;
+  var projX = 0;
+  var projY = 0;
+  var projVX = 0;
+  var projLife = 0;
+  var projTrailT = 0;
+
+  // ---------------------------------------------------------------------------
+  // Animation state machine
+  // ---------------------------------------------------------------------------
+  var ST_IDLE = 0;
+  var ST_CHARGE = 1;
+  var ST_CAST = 2;
+  var ST_RECOVER = 3;
+  var state = ST_IDLE;
+  var stateT = 0;
+
+  // Durations in seconds
+  var DUR_IDLE = 2.4;
+  var DUR_CHARGE = 1.6;
+  var DUR_CAST = 0.55;
+  var DUR_RECOVER = 0.9;
+
+  // Pose parameters (float, quantized at draw)
+  var pose = {
+    bob: 0,
+    beard: 0,
+    staffAng: -0.35,   // radians, 0 = upright-ish toward right
+    armRaise: 0,       // 0..1
+    headTilt: 0,       // radians
+    robeSway: 0,
+    gemPulse: 0,       // 0..1 brightness
+    castFlash: 0
+  };
+
+  // Keyframe targets per state
+  function easeInOut(t) {
+    return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+  }
+  function easeOut(t) {
+    return 1 - (1 - t) * (1 - t);
+  }
+  function easeIn(t) {
+    return t * t;
+  }
+  function lerp(a, b, t) {
+    return a + (b - a) * t;
+  }
+  function clamp(v, a, b) {
+    return v < a ? a : v > b ? b : v;
+  }
+
+  // Charge spark spawn timer
+  var chargeSpawnAcc = 0;
+  var castBurstDone = 0;
+  var shakeAmt = 0;
+
+  // ---------------------------------------------------------------------------
+  // Wizard draw — procedural ~24x32, integer coords
+  // Base anchor: feet at (ox, oy). oy is ground contact.
+  // ---------------------------------------------------------------------------
+  function drawWizard(ox, oy) {
+    var bob = (pose.bob + 0.5) | 0; // -1,0,1-ish
+    var sway = (pose.robeSway + 0.5) | 0;
+    var headT = (pose.headTilt * 3 + 0.5) | 0; // -1..1 px
+    var armR = pose.armRaise;
+    var staffA = pose.staffAng;
+
+    // Body origin (torso top-ish)
+    var bx = ox | 0;
+    var by = (oy - 18 + bob) | 0;
+
+    // --- Robe (two-shade + outline) ---
+    // Outline darker
+    fillRect(bx - 6 + sway, by + 6, 14, 14, P.robe2);
+    fillRect(bx - 7 + sway, by + 8, 1, 10, P.robe2);
+    fillRect(bx + 7 + sway, by + 8, 1, 10, P.robe2);
+    // Main robe
+    fillRect(bx - 5 + sway, by + 7, 12, 12, P.robe);
+    // Highlight panel
+    fillRect(bx - 3 + sway, by + 8, 4, 9, P.robe3);
+    // Belt
+    hrun(bx - 5 + sway, by + 12, 12, P.robe2);
+    hrun(bx - 4 + sway, by + 12, 3, P.hatHi);
+    // Robe hem flaps
+    fillRect(bx - 6 + sway, by + 19, 5, 2, P.robe);
+    fillRect(bx + 1 + sway, by + 19, 6, 2, P.robe2);
+    fillRect(bx - 7 + sway, by + 20, 3, 1, P.robe2);
+    fillRect(bx + 5 + sway, by + 20, 3, 1, P.robe);
+
+    // --- Legs / feet ---
+    fillRect(bx - 3, by + 21, 3, 3, P.robe2);
+    fillRect(bx + 2, by + 21, 3, 3, P.robe2);
+    fillRect(bx - 3, by + 23, 3, 1, P.black);
+    fillRect(bx + 2, by + 23, 3, 1, P.black);
+
+    // --- Torso / shoulders ---
+    fillRect(bx - 4, by + 4, 10, 4, P.robe);
+    fillRect(bx - 5, by + 5, 1, 3, P.robe2);
+    fillRect(bx + 5, by + 5, 1, 3, P.robe2);
+
+    // --- Head ---
+    var hx = (bx + headT) | 0;
+    var hy = (by - 2) | 0;
+    fillRect(hx - 3, hy, 7, 6, P.skin);
+    fillRect(hx - 3, hy + 5, 7, 1, P.skin2);
+    // Eyes
+    px(hx - 1, hy + 2, P.black);
+    px(hx + 2, hy + 2, P.black);
+    px(hx - 1, hy + 1, P.moon);
+    // Nose hint
+    px(hx + 0, hy + 3, P.skin2);
+
+    // --- Beard ---
+    var bsw = (pose.beard + 0.5) | 0;
+    fillRect(hx - 3 + bsw, hy + 5, 7, 2, P.beard);
+    fillRect(hx - 2 + bsw, hy + 7, 5, 2, P.beard);
+    fillRect(hx - 1 + bsw, hy + 9, 3, 2, P.beard);
+    fillRect(hx + 0 + bsw, hy + 11, 2, 2, P.beard2);
+    px(hx - 3 + bsw, hy + 6, P.beard2);
+    px(hx + 3 + bsw, hy + 6, P.beard2);
+    px(hx + 0 + bsw, hy + 13, P.beard2);
+
+    // --- Hat (pointed with bend) ---
+    // Brim
+    fillRect(hx - 5, hy - 1, 11, 2, P.hat);
+    fillRect(hx - 5, hy - 1, 11, 1, P.hat2);
+    // Cone
+    fillRect(hx - 3, hy - 5, 7, 4, P.hat);
+    fillRect(hx - 2, hy - 8, 5, 3, P.hat);
+    fillRect(hx - 1, hy - 10, 3, 2, P.hat);
+    // Bend tip to the left
+    fillRect(hx - 3, hy - 11, 3, 2, P.hat);
+    fillRect(hx - 5, hy - 12, 3, 2, P.hat);
+    fillRect(hx - 6, hy - 11, 2, 1, P.hat);
+    // Hat band
+    hrun(hx - 3, hy - 2, 7, P.hatHi);
+    px(hx + 0, hy - 2, P.gem2);
+    // Hat outline dark
+    hrun(hx - 5, hy - 12, 1, P.hat2);
+    px(hx - 6, hy - 11, P.hat2);
+    vrun(hx + 3, hy - 8, 3, P.hat2);
+
+    // --- Arms ---
+    // Left arm (back, resting)
+    fillRect(bx - 7, by + 6, 3, 2, P.skin2);
+    fillRect(bx - 8, by + 7, 2, 5, P.robe2);
+    fillRect(bx - 8, by + 12, 2, 2, P.skin2);
+
+    // Right arm — raises with staff
+    var armLift = (armR * 8) | 0;
+    var rax = (bx + 6) | 0;
+    var ray = (by + 5 - armLift) | 0;
+    fillRect(rax, ray, 3, 2, P.skin);
+    fillRect(rax + 1, ray + 1, 2, 4, P.robe);
+    fillRect(rax + 2, ray + 4, 2, 2, P.skin2);
+
+    // --- Staff ---
+    // Staff origin near right hand
+    var handX = rax + 3;
+    var handY = ray + 5;
+    // Direction from angle: tip is away along angle
+    // staffAng ~ -0.9 raised, -0.2 idle lower-right
+    var cosA = Math.cos(staffA);
+    var sinA = Math.sin(staffA);
+    var staffLen = 18;
+    // Draw staff as stepped pixels along the line
+    var tipX = handX + cosA * staffLen;
+    var tipY = handY + sinA * staffLen;
+    var steps = staffLen;
+    var si;
+    for (si = 0; si <= steps; si++) {
+      var t = si / steps;
+      var sx = (handX + (tipX - handX) * t + 0.5) | 0;
+      var sy = (handY + (tipY - handY) * t + 0.5) | 0;
+      px(sx, sy, si < 2 ? P.staff2 : P.staff);
+      if (si > 2 && (si & 3) === 0) px(sx + 1, sy, P.staff2);
+    }
+    // Grip wrap
+    px(handX, handY, P.robe3);
+    px(handX + 1, handY, P.robe3);
+
+    // Gem at tip
+    var gx = (tipX + 0.5) | 0;
+    var gy = (tipY + 0.5) | 0;
+    var pulse = pose.gemPulse;
+    var gemC = pulse > 0.75 ? P.magW : pulse > 0.45 ? P.gem3 : pulse > 0.2 ? P.gem : P.gem2;
+    fillRect(gx - 1, gy - 1, 3, 3, gemC);
+    px(gx, gy, P.magW);
+    if (pulse > 0.5) {
+      px(gx - 2, gy, P.magA);
+      px(gx + 2, gy, P.magA);
+      px(gx, gy - 2, P.magA);
+      px(gx, gy + 2, P.magA);
+    }
+    if (pulse > 0.8) {
+      px(gx - 2, gy - 2, P.magB);
+      px(gx + 2, gy - 2, P.magB);
+      px(gx - 2, gy + 2, P.magB);
+      px(gx + 2, gy + 2, P.magB);
+    }
+
+    // --- Rim light from gem (1px, brightens on charge/cast) ---
+    if (pulse > 0.15) {
+      var rimC = pulse > 0.6 ? P.rim : P.magB;
+      // Right edge of robe/hat facing gem
+      px(bx + 6 + sway, by + 8, rimC);
+      px(bx + 6 + sway, by + 10, rimC);
+      px(bx + 6 + sway, by + 14, rimC);
+      px(hx + 4, hy + 1, rimC);
+      px(hx + 3, hy - 4, rimC);
+      if (pulse > 0.5) {
+        px(bx + 5 + sway, by + 9, rimC);
+        px(bx + 5 + sway, by + 15, rimC);
+        px(hx + 4, hy + 3, P.magA);
+      }
+    }
+
+    // Gem tip stored on shared scratch (no per-frame alloc)
+    gemScratch.gx = tipX;
+    gemScratch.gy = tipY;
+    gemScratch.hx = handX;
+    gemScratch.hy = handY;
+  }
+
+  var gemScratch = { gx: 0, gy: 0, hx: 0, hy: 0 };
+
+  // ---------------------------------------------------------------------------
+  // Background
+  // ---------------------------------------------------------------------------
+  function drawBackground(time) {
+    // Sky bands
+    fillRect(0, 0, LW, 40, P.sky0);
+    fillRect(0, 40, LW, 24, P.sky1);
+    fillRect(0, 64, LW, 20, P.sky2);
+    // Subtle upper vignette strip
+    fillRect(0, 0, LW, 3, P.black);
+
+    // Moon
+    fillRect(98, 10, 10, 10, P.moon);
+    fillRect(99, 9, 8, 1, P.moon);
+    fillRect(99, 20, 8, 1, P.moon);
+    fillRect(97, 11, 1, 8, P.moon);
+    fillRect(108, 11, 1, 8, P.moon);
+    // Moon crater / shade
+    fillRect(104, 13, 3, 3, P.moon2);
+    px(101, 16, P.moon2);
+    px(100, 12, P.moon2);
+    // Moon glow ring (1px, palette)
+    hrun(98, 8, 10, P.sky2);
+    hrun(98, 21, 10, P.sky2);
+
+    // Stars twinkle
+    var i, tw, c;
+    for (i = 0; i < STAR_N; i++) {
+      tw = Math.sin(time * starSpeed[i] + starPhase[i]);
+      if (tw > 0.35) c = P.star;
+      else if (tw > -0.2) c = P.star2;
+      else continue;
+      px(starX[i], starY[i], c);
+    }
+
+    // Floor
+    fillRect(0, 84, LW, 12, P.floor2);
+    hrun(0, 84, LW, P.floor);
+    // Stone tiles
+    var tx;
+    for (tx = 0; tx < LW; tx += 8) {
+      vrun(tx, 85, 3, P.stone);
+      px(tx + 3, 88, P.stone);
+    }
+    hrun(0, 90, LW, P.stone);
+    // Tiny pebbles
+    px(20, 86, P.stone);
+    px(47, 87, P.floor);
+    px(88, 86, P.stone);
+    px(110, 87, P.floor);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Particles update + draw
+  // ---------------------------------------------------------------------------
+  function updateParticles(dt, gemX, gemY) {
+    var i, lifeT, idx;
+    for (i = 0; i < PART_MAX; i++) {
+      if (!pAlive[i]) continue;
+      pLife[i] -= dt;
+      if (pLife[i] <= 0) {
+        pAlive[i] = 0;
+        continue;
+      }
+      if (pKind[i] === 0) {
+        // Orbit spark around gem
+        pAngle[i] += pSpin[i] * dt;
+        // Spiral inward slightly during charge
+        pRadius[i] = Math.max(1, pRadius[i] - dt * 4);
+        pX[i] = gemX + Math.cos(pAngle[i]) * pRadius[i];
+        pY[i] = gemY + Math.sin(pAngle[i]) * pRadius[i] * 0.7;
+      } else {
+        pX[i] += pVX[i] * dt;
+        pY[i] += pVY[i] * dt;
+        // Gravity-ish for burst
+        if (pKind[i] === 1) pVY[i] += 18 * dt;
+        // Drag
+        pVX[i] *= 1 - 1.2 * dt;
+        pVY[i] *= 1 - 0.6 * dt;
+      }
+    }
+  }
+
+  function drawParticles() {
+    var i, lifeT, idx, c;
+    for (i = 0; i < PART_MAX; i++) {
+      if (!pAlive[i]) continue;
+      lifeT = 1 - pLife[i] / pMaxLife[i];
+      idx = (lifeT * (PART_COLORS.length - 1) + 0.5) | 0;
+      if (idx < 0) idx = 0;
+      if (idx >= PART_COLORS.length) idx = PART_COLORS.length - 1;
+      c = PART_COLORS[idx];
+      px(pX[i], pY[i], c);
+      // Bright core early life
+      if (lifeT < 0.25 && pKind[i] !== 0) {
+        px((pX[i] | 0) + 1, pY[i], P.magW);
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Projectile
+  // ---------------------------------------------------------------------------
+  function updateProjectile(dt) {
+    if (!projAlive) return;
+    projX += projVX * dt;
+    projLife -= dt;
+    projTrailT += dt;
+    // Trail sparks
+    while (projTrailT > 0.03) {
+      projTrailT -= 0.03;
+      spawnParticle(
+        2,
+        projX,
+        projY,
+        -projVX * 0.15 + (Math.random() - 0.5) * 20,
+        (Math.random() - 0.5) * 24,
+        0.25 + Math.random() * 0.2,
+        0, 0, 0
+      );
+    }
+    if (projLife <= 0 || projX > LW + 4) {
+      projAlive = 0;
+    }
+  }
+
+  function drawProjectile() {
+    if (!projAlive) return;
+    var x = projX | 0;
+    var y = projY | 0;
+    // Bolt body
+    fillRect(x - 2, y - 1, 5, 3, P.gem);
+    fillRect(x - 1, y, 4, 1, P.magW);
+    px(x + 3, y, P.gem3);
+    px(x - 3, y, P.magB);
+    px(x, y - 2, P.magA);
+    px(x, y + 2, P.magA);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Cast flash overlay
+  // ---------------------------------------------------------------------------
+  function drawFlash() {
+    if (pose.castFlash <= 0.02) return;
+    var f = pose.castFlash;
+    // Concentric diamond burst from gem path — limited rects
+    var cx = 52;
+    var cy = 40;
+    var r = (f * 28) | 0;
+    var c = f > 0.6 ? P.magW : f > 0.35 ? P.gem3 : f > 0.15 ? P.gem : P.magC;
+    // Horizontal / vertical cross
+    if (r > 0) {
+      hrun(cx - r, cy, r * 2 + 1, c);
+      vrun(cx, cy - r, r * 2 + 1, c);
+    }
+    if (r > 3) {
+      var r2 = r - 3;
+      hrun(cx - r2, cy - 1, r2 * 2 + 1, P.magA);
+      hrun(cx - r2, cy + 1, r2 * 2 + 1, P.magA);
+    }
+    if (f > 0.5) {
+      fillRect(cx - 2, cy - 2, 5, 5, P.magW);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // State machine + pose easing
+  // ---------------------------------------------------------------------------
+  function setState(s) {
+    state = s;
+    stateT = 0;
+    if (s === ST_CHARGE) {
+      chargeSpawnAcc = 0;
+    }
+    if (s === ST_CAST) {
+      castBurstDone = 0;
+      shakeAmt = 1.5;
+    }
+  }
+
+  function updatePose(dt) {
+    stateT += dt;
+    var t, u;
+
+    if (state === ST_IDLE) {
+      t = stateT / DUR_IDLE;
+      // 2-frame bob feel via sine quantized later
+      pose.bob = Math.sin(stateT * Math.PI * 2 * 1.2) * 1.1;
+      pose.beard = Math.sin(stateT * 2.1) * 1.2;
+      pose.robeSway = Math.sin(stateT * 1.4) * 1.0;
+      pose.staffAng = lerp(pose.staffAng, -0.45, 1 - Math.exp(-dt * 6));
+      pose.armRaise = lerp(pose.armRaise, 0.15, 1 - Math.exp(-dt * 5));
+      pose.headTilt = Math.sin(stateT * 0.9) * 0.08;
+      pose.gemPulse = 0.15 + Math.sin(stateT * 3.5) * 0.08;
+      pose.castFlash = lerp(pose.castFlash, 0, 1 - Math.exp(-dt * 8));
+      if (stateT >= DUR_IDLE) setState(ST_CHARGE);
+    } else if (state === ST_CHARGE) {
+      t = clamp(stateT / DUR_CHARGE, 0, 1);
+      u = easeInOut(t);
+      pose.bob = Math.sin(stateT * 8) * 0.4 * (1 - t);
+      pose.beard = Math.sin(stateT * 5) * 0.6;
+      pose.robeSway = Math.sin(stateT * 3) * 0.5;
+      pose.staffAng = lerp(-0.45, -1.15, u);
+      pose.armRaise = lerp(0.15, 1.0, u);
+      pose.headTilt = lerp(0, -0.2, u);
+      pose.gemPulse = 0.3 + easeIn(t) * 0.7 + Math.sin(stateT * 18) * 0.12 * t;
+      pose.castFlash = 0;
+      // Spawn orbiting sparks
+      chargeSpawnAcc += dt;
+      while (chargeSpawnAcc > 0.07) {
+        chargeSpawnAcc -= 0.07;
+        var ang = Math.random() * Math.PI * 2;
+        var rad = 6 + Math.random() * 8;
+        spawnParticle(0, 0, 0, 0, 0, 0.5 + Math.random() * 0.5, ang, rad, 4 + Math.random() * 6);
+      }
+      if (stateT >= DUR_CHARGE) setState(ST_CAST);
+    } else if (state === ST_CAST) {
+      t = clamp(stateT / DUR_CAST, 0, 1);
+      u = easeOut(t);
+      pose.bob = 0;
+      pose.beard = Math.sin(stateT * 20) * 0.8 * (1 - t);
+      pose.robeSway = (1 - t) * 1.5;
+      pose.staffAng = lerp(-1.15, -0.85, u);
+      pose.armRaise = lerp(1.0, 0.85, u);
+      pose.headTilt = lerp(-0.2, 0.15, u);
+      pose.gemPulse = 1.0 - t * 0.4;
+      pose.castFlash = t < 0.35 ? easeOut(t / 0.35) : easeIn(1 - (t - 0.35) / 0.65);
+
+      if (!castBurstDone) {
+        castBurstDone = 1;
+        // Burst particles outward
+        var bi, bang, spd;
+        for (bi = 0; bi < 36; bi++) {
+          bang = (bi / 36) * Math.PI * 2 + Math.random() * 0.2;
+          spd = 40 + Math.random() * 70;
+          spawnParticle(
+            1,
+            pose._gx || 52,
+            pose._gy || 36,
+            Math.cos(bang) * spd,
+            Math.sin(bang) * spd * 0.85,
+            0.35 + Math.random() * 0.45,
+            0, 0, 0
+          );
+        }
+        // Extra bright sparks
+        for (bi = 0; bi < 12; bi++) {
+          bang = Math.random() * Math.PI * 2;
+          spd = 20 + Math.random() * 40;
+          spawnParticle(
+            1,
+            pose._gx || 52,
+            pose._gy || 36,
+            Math.cos(bang) * spd,
+            Math.sin(bang) * spd - 20,
+            0.2 + Math.random() * 0.25,
+            0, 0, 0
+          );
+        }
+        // Fire projectile
+        projAlive = 1;
+        projX = pose._gx || 52;
+        projY = pose._gy || 36;
+        projVX = 110;
+        projLife = 1.1;
+        projTrailT = 0;
+      }
+
+      // Screen shake decay
+      shakeAmt = Math.max(0, shakeAmt - dt * 4.5);
+      if (stateT >= DUR_CAST) setState(ST_RECOVER);
+    } else if (state === ST_RECOVER) {
+      t = clamp(stateT / DUR_RECOVER, 0, 1);
+      u = easeInOut(t);
+      pose.bob = Math.sin(stateT * 4) * 0.5 * (1 - u);
+      pose.beard = Math.sin(stateT * 2.5) * 1.0;
+      pose.robeSway = Math.sin(stateT * 2) * 0.8;
+      pose.staffAng = lerp(-0.85, -0.45, u);
+      pose.armRaise = lerp(0.85, 0.15, u);
+      pose.headTilt = lerp(0.15, 0, u);
+      pose.gemPulse = lerp(0.6, 0.15, u);
+      pose.castFlash = lerp(pose.castFlash, 0, 1 - Math.exp(-dt * 10));
+      shakeAmt = Math.max(0, shakeAmt - dt * 6);
+      if (stateT >= DUR_RECOVER) setState(ST_IDLE);
+    }
+
+    // Shake offsets (quantized later)
+    if (shakeAmt > 0.05) {
+      shakeX = ((Math.random() - 0.5) * 2 * shakeAmt);
+      shakeY = ((Math.random() - 0.5) * 2 * shakeAmt);
+    } else {
+      shakeX = 0;
+      shakeY = 0;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Fixed timestep
+  // ---------------------------------------------------------------------------
+  var STEP = 1 / 60;
+  var acc = 0;
+  var last = 0;
+  var time = 0;
+  var gemPos = { gx: 52, gy: 36 };
+
+  // Seed Math.random for first frame stability is not needed; particles ok
+
+  function update(dt) {
+    time += dt;
+    updatePose(dt);
+    // Wizard feet position
+    var feetX = 36;
+    var feetY = 84;
+    // We need gem position before particles — approximate from pose for spawn,
+    // then exact after draw is only for next frame; compute tip here too
+    var armR = pose.armRaise;
+    var staffA = pose.staffAng;
+    var bob = (pose.bob + 0.5) | 0;
+    var bx = feetX;
+    var by = (feetY - 18 + bob) | 0;
+    var armLift = (armR * 8) | 0;
+    var rax = (bx + 6) | 0;
+    var ray = (by + 5 - armLift) | 0;
+    var handX = rax + 3;
+    var handY = ray + 5;
+    var tipX = handX + Math.cos(staffA) * 18;
+    var tipY = handY + Math.sin(staffA) * 18;
+    pose._gx = tipX;
+    pose._gy = tipY;
+    gemPos.gx = tipX;
+    gemPos.gy = tipY;
+
+    updateParticles(dt, tipX, tipY);
+    updateProjectile(dt);
+  }
+
+  function render() {
+    var shx = (shakeX + 0.5) | 0;
+    var shy = (shakeY + 0.5) | 0;
+
+    ctx.save();
+    ctx.translate(shx, shy);
+
+    drawBackground(time);
+
+    // Wizard
+    drawWizard(36, 84);
+
+    // Flash on top of gem area
+    drawFlash();
+
+    // Projectile + particles (snap inside draw)
+    drawProjectile();
+    drawParticles();
+
+    // Soft ground shadow under wizard (palette, 1px tall)
+    fillRect(28, 84, 18, 1, P.floor2);
+
+    ctx.restore();
+
+    // Blit integer-scaled to display
+    dctx.imageSmoothingEnabled = false;
+    dctx.fillStyle = P.sky0;
+    dctx.fillRect(0, 0, display.width, display.height);
+    dctx.drawImage(off, 0, 0, LW, LH, 0, 0, LW * scale, LH * scale);
+  }
+
+  function frame(now) {
+    if (!last) last = now;
+    var delta = (now - last) / 1000;
+    last = now;
+    // Clamp spiral of death
+    if (delta > 0.1) delta = 0.1;
+    acc += delta;
+    while (acc >= STEP) {
+      update(STEP);
+      acc -= STEP;
+    }
+    render();
+    requestAnimationFrame(frame);
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

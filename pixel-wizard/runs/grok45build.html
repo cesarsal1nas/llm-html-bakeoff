@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>grok45build</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    background: #050510;
+  }
+  canvas#display {
+    display: block;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+  }
+</style>
+</head>
+<body>
+<canvas id="display"></canvas>
+<script>
+(function () {
+  "use strict";
+
+  // ─── Logical resolution ───────────────────────────────────────────
+  const W = 128, H = 96;
+
+  // ─── Fixed palette (24 colors) ────────────────────────────────────
+  //  0 void          1 deep night     2 night          3 purple night
+  //  4 dusk          5 stone dark     6 stone          7 stone light
+  //  8 moon dim      9 moon           10 white          11 spark
+  // 12 robe outline  13 robe dark     14 robe           15 robe light
+  // 16 skin          17 skin light    18 beard          19 beard shade
+  // 20 staff dark    21 staff         22 magic cyan     23 magic blue
+  // 24 magic magenta 25 magic gold    26 magic orange
+  const P = [
+    "#050510", // 0
+    "#0a0a1e", // 1
+    "#12122a", // 2
+    "#1a1840", // 3
+    "#2a2060", // 4
+    "#2a2438", // 5
+    "#3a3450", // 6
+    "#524a68", // 7
+    "#8a8ab0", // 8
+    "#c8c8e0", // 9
+    "#e8e8f8", // 10
+    "#f8f8ff", // 11
+    "#3a2048", // 12
+    "#5a3070", // 13
+    "#8a50a0", // 14
+    "#c070b8", // 15
+    "#e0a070", // 16
+    "#f0c090", // 17
+    "#d0d0e8", // 18
+    "#9898b0", // 19
+    "#3a2818", // 20
+    "#6a4828", // 21
+    "#60e0ff", // 22
+    "#3080ff", // 23
+    "#ff50d0", // 24
+    "#ffe040", // 25
+    "#ff9040", // 26
+  ];
+
+  // ─── Canvases ─────────────────────────────────────────────────────
+  const display = document.getElementById("display");
+  const dctx = display.getContext("2d");
+  dctx.imageSmoothingEnabled = false;
+
+  const logical = document.createElement("canvas");
+  logical.width = W;
+  logical.height = H;
+  const lctx = logical.getContext("2d");
+  lctx.imageSmoothingEnabled = false;
+
+  let scale = 1;
+
+  function resize() {
+    const sx = (window.innerWidth / W) | 0;
+    const sy = (window.innerHeight / H) | 0;
+    scale = sx < 1 ? 1 : (sy < sx ? sy : sx);
+    if (scale < 1) scale = 1;
+    display.width = W * scale;
+    display.height = H * scale;
+    dctx.imageSmoothingEnabled = false;
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  // ─── Drawing helpers (integer only) ───────────────────────────────
+  function setC(ci) { lctx.fillStyle = P[ci]; }
+  function px(x, y, ci) {
+    lctx.fillStyle = P[ci];
+    lctx.fillRect(x | 0, y | 0, 1, 1);
+  }
+  function rect(x, y, w, h, ci) {
+    if (w < 1 || h < 1) return;
+    lctx.fillStyle = P[ci];
+    lctx.fillRect(x | 0, y | 0, w | 0, h | 0);
+  }
+  function hrun(x, y, len, ci) {
+    if (len < 1) return;
+    lctx.fillStyle = P[ci];
+    lctx.fillRect(x | 0, y | 0, len | 0, 1);
+  }
+  function vrun(x, y, len, ci) {
+    if (len < 1) return;
+    lctx.fillStyle = P[ci];
+    lctx.fillRect(x | 0, y | 0, 1, len | 0);
+  }
+
+  // ─── Deterministic LCG (no Math.random in loop) ───────────────────
+  let rng = 0xC0FFEE;
+  function rand() {
+    rng = (Math.imul(rng, 1664525) + 1013904223) | 0;
+    return (rng >>> 0) / 4294967296;
+  }
+
+  // ─── Stars (precomputed) ──────────────────────────────────────────
+  const STAR_N = 32;
+  const starsX = new Int16Array(STAR_N);
+  const starsY = new Int16Array(STAR_N);
+  const starsPhase = new Float32Array(STAR_N);
+  const starsSpeed = new Float32Array(STAR_N);
+  for (let i = 0; i < STAR_N; i++) {
+    starsX[i] = (i * 41 + 13) % W;
+    starsY[i] = 2 + ((i * 57 + 9) % 56);
+    starsPhase[i] = (i * 1.7) % 6.2832;
+    starsSpeed[i] = 0.7 + (i % 5) * 0.4;
+  }
+
+  // ─── Particle pool (allocation-free) ──────────────────────────────
+  const PART_N = 80;
+  const pAlive = new Uint8Array(PART_N);
+  const pX = new Float32Array(PART_N);
+  const pY = new Float32Array(PART_N);
+  const pVX = new Float32Array(PART_N);
+  const pVY = new Float32Array(PART_N);
+  const pLife = new Float32Array(PART_N);
+  const pMaxLife = new Float32Array(PART_N);
+  const pKind = new Uint8Array(PART_N); // 0 orbit, 1 burst, 2 trail
+  const pAngle = new Float32Array(PART_N);
+  const pRadius = new Float32Array(PART_N);
+  const pAngVel = new Float32Array(PART_N);
+
+  // white → gold → magenta → cyan → blue → dusk
+  const PART_COLORS = [11, 10, 25, 24, 22, 23, 4, 3];
+
+  function spawnParticle(kind, x, y, vx, vy, life, angle, radius, angVel) {
+    for (let i = 0; i < PART_N; i++) {
+      if (!pAlive[i]) {
+        pAlive[i] = 1;
+        pX[i] = x; pY[i] = y;
+        pVX[i] = vx; pVY[i] = vy;
+        pLife[i] = life; pMaxLife[i] = life;
+        pKind[i] = kind;
+        pAngle[i] = angle; pRadius[i] = radius; pAngVel[i] = angVel;
+        return i;
+      }
+    }
+    return -1;
+  }
+
+  // ─── Projectile / shake ───────────────────────────────────────────
+  let projAlive = 0;
+  let projX = 0, projY = 0, projVX = 0, projVY = 0, projLife = 0;
+  let shakeX = 0, shakeY = 0, shakeTimer = 0;
+  let castFired = 0;
+
+  // Gem world cache (updated each frame before particles)
+  let gemX = 0, gemY = 0;
+
+  // ─── State machine ────────────────────────────────────────────────
+  const ST_IDLE = 0, ST_CHARGE = 1, ST_CAST = 2, ST_RECOVER = 3;
+  let state = ST_IDLE;
+  let stateT = 0;
+
+  const DUR_IDLE = 2.5;
+  const DUR_CHARGE = 1.7;
+  const DUR_CAST = 0.6;
+  const DUR_RECOVER = 1.0;
+
+  // Smooth pose + targets
+  let bob = 0, beardSway = 0, staffAngle = 0, armRaise = 0;
+  let headTilt = 0, robeSway = 0, gemBright = 0, rimLight = 0;
+  let tBob = 0, tBeard = 0, tStaff = 0, tArm = 0;
+  let tHead = 0, tRobe = 0, tGem = 0, tRim = 0;
+
+  function easeToward(cur, tgt, rate, dt) {
+    const a = 1 - Math.pow(1 - rate, dt * 60);
+    return cur + (tgt - cur) * a;
+  }
+
+  function setState(s) {
+    state = s;
+    stateT = 0;
+    if (s === ST_CAST) castFired = 0;
+  }
+
+  // Wizard anchor (feet)
+  const WIZ_X = 38;
+  const WIZ_Y = 74;
+
+  function updateGemPos() {
+    const qBob = bob < 0 ? -((-bob) | 0) : (bob | 0);
+    const qArm = ((armRaise * 8 + 0.5) | 0) / 8;
+    const qStaff = ((staffAngle * 10 + (staffAngle < 0 ? -0.5 : 0.5)) | 0) / 10;
+    const by = WIZ_Y + qBob;
+    const baseX = WIZ_X + 20;
+    const baseY = by - 16 - ((qArm * 5) | 0);
+    const len = 20;
+    const ang = -1.05 + qStaff;
+    gemX = baseX + Math.cos(ang) * len;
+    gemY = baseY + Math.sin(ang) * len;
+  }
+
+  // ─── Update (fixed 60 Hz) ─────────────────────────────────────────
+  function update(dt) {
+    stateT += dt;
+
+    if (state === ST_IDLE) {
+      const phase = stateT * 5.236; // ~2π / 1.2
+      tBob = Math.sin(phase) * 1.0;
+      tBeard = Math.sin(phase * 0.7 + 0.4) * 1.2;
+      tStaff = Math.sin(phase * 0.45) * 0.06;
+      tArm = 0.08 + Math.sin(phase) * 0.05;
+      tHead = Math.sin(phase * 0.35) * 0.5;
+      tRobe = Math.sin(phase * 0.55) * 0.8;
+      tGem = 0.3 + Math.sin(stateT * 2.8) * 0.12;
+      tRim = 0.2;
+      if (stateT >= DUR_IDLE) setState(ST_CHARGE);
+    } else if (state === ST_CHARGE) {
+      const u = stateT / DUR_CHARGE;
+      const ease = u < 0 ? 0 : (u > 1 ? 1 : u * u * (3 - 2 * u));
+      tBob = Math.sin(stateT * 9) * 0.25;
+      tBeard = Math.sin(stateT * 5) * 0.7;
+      tStaff = -0.7 * ease + Math.sin(stateT * 14) * 0.05 * ease;
+      tArm = 0.1 + 0.9 * ease;
+      tHead = -1.0 * ease;
+      tRobe = Math.sin(stateT * 3.5) * 0.5;
+      tGem = 0.45 + 0.55 * ease + Math.sin(stateT * 22) * 0.12 * ease;
+      tRim = 0.25 + 0.75 * ease;
+
+      updateGemPos();
+      const tick = (stateT * 60) | 0;
+      if (tick % 3 === 0) {
+        const a = rand() * 6.2832;
+        const r = 3 + rand() * 6;
+        spawnParticle(0, gemX, gemY, 0, 0, 0.55 + rand() * 0.35, a, r, 5 + rand() * 6);
+      }
+      if (tick % 5 === 0) {
+        const a = rand() * 6.2832;
+        const r = 9 + rand() * 10;
+        spawnParticle(0, gemX, gemY, 0, 0, 0.55, a, r, -(2.5 + rand() * 4));
+      }
+      if (stateT >= DUR_CHARGE) setState(ST_CAST);
+    } else if (state === ST_CAST) {
+      tBob = 0.2;
+      tBeard = 1.4;
+      tStaff = 0.15;
+      tArm = 1.0;
+      tHead = 0.6;
+      tRobe = -1.0;
+      tGem = 1.0;
+      tRim = 1.0;
+
+      if (!castFired) {
+        castFired = 1;
+        updateGemPos();
+        projAlive = 1;
+        projX = gemX;
+        projY = gemY;
+        projVX = 90;
+        projVY = -6 + rand() * 4;
+        projLife = 1.1;
+        shakeTimer = 0.2;
+        for (let k = 0; k < 32; k++) {
+          const a = (k / 32) * 6.2832 + rand() * 0.25;
+          const sp = 25 + rand() * 50;
+          spawnParticle(1, gemX, gemY, Math.cos(a) * sp, Math.sin(a) * sp, 0.3 + rand() * 0.4, 0, 0, 0);
+        }
+      }
+      if (stateT >= DUR_CAST) setState(ST_RECOVER);
+    } else {
+      // RECOVER
+      const u = stateT / DUR_RECOVER;
+      const ease = u < 0 ? 0 : (u > 1 ? 1 : u * u * (3 - 2 * u));
+      const inv = 1 - ease;
+      tBob = Math.sin(stateT * 4) * 0.6 * inv;
+      tBeard = Math.sin(stateT * 3) * 0.5 * inv;
+      tStaff = 0.1 * inv;
+      tArm = 1.0 * inv + 0.08 * ease;
+      tHead = 0.5 * inv;
+      tRobe = Math.sin(stateT * 2) * 0.6 * inv;
+      tGem = 1.0 * inv + 0.3 * ease;
+      tRim = 1.0 * inv + 0.2 * ease;
+      if (stateT >= DUR_RECOVER) setState(ST_IDLE);
+    }
+
+    bob = easeToward(bob, tBob, 0.28, dt);
+    beardSway = easeToward(beardSway, tBeard, 0.22, dt);
+    staffAngle = easeToward(staffAngle, tStaff, 0.2, dt);
+    armRaise = easeToward(armRaise, tArm, 0.22, dt);
+    headTilt = easeToward(headTilt, tHead, 0.24, dt);
+    robeSway = easeToward(robeSway, tRobe, 0.2, dt);
+    gemBright = easeToward(gemBright, tGem, 0.32, dt);
+    rimLight = easeToward(rimLight, tRim, 0.28, dt);
+
+    updateGemPos();
+
+    if (shakeTimer > 0) {
+      shakeTimer -= dt;
+      if (shakeTimer < 0) shakeTimer = 0;
+      const mag = (shakeTimer / 0.2) * 2;
+      shakeX = ((rand() * 2 - 1) * mag) | 0;
+      shakeY = ((rand() * 2 - 1) * mag) | 0;
+    } else {
+      shakeX = 0;
+      shakeY = 0;
+    }
+
+    if (projAlive) {
+      projX += projVX * dt;
+      projY += projVY * dt;
+      projLife -= dt;
+      if ((((perfTime * 60) | 0) & 1) === 0) {
+        spawnParticle(2, projX, projY, -projVX * 0.08, (rand() - 0.5) * 12, 0.28, 0, 0, 0);
+      }
+      if (projLife <= 0 || projX > W + 6) projAlive = 0;
+    }
+
+    for (let i = 0; i < PART_N; i++) {
+      if (!pAlive[i]) continue;
+      pLife[i] -= dt;
+      if (pLife[i] <= 0) { pAlive[i] = 0; continue; }
+      if (pKind[i] === 0) {
+        pAngle[i] += pAngVel[i] * dt;
+        pRadius[i] -= 7 * dt;
+        if (pRadius[i] < 0.4) pRadius[i] = 0.4;
+        pX[i] = gemX + Math.cos(pAngle[i]) * pRadius[i];
+        pY[i] = gemY + Math.sin(pAngle[i]) * pRadius[i] * 0.65;
+      } else {
+        pX[i] += pVX[i] * dt;
+        pY[i] += pVY[i] * dt;
+        pVX[i] *= 0.95;
+        pVY[i] *= 0.95;
+      }
+    }
+  }
+
+  // ─── Scene ────────────────────────────────────────────────────────
+  function draw() {
+    // Sky bands
+    rect(0, 0, W, 18, 0);
+    rect(0, 18, W, 20, 1);
+    rect(0, 38, W, 22, 2);
+    rect(0, 60, W, 16, 3);
+
+    // Moon
+    const mx = 102, my = 16;
+    rect(mx - 5, my - 4, 11, 9, 8);
+    rect(mx - 4, my - 5, 9, 11, 8);
+    rect(mx - 4, my - 4, 9, 9, 9);
+    rect(mx - 3, my - 3, 7, 7, 10);
+    px(mx + 1, my - 1, 8);
+    px(mx - 2, my + 1, 8);
+    px(mx + 2, my + 2, 8);
+
+    // Stars
+    for (let i = 0; i < STAR_N; i++) {
+      const tw = Math.sin(perfTime * starsSpeed[i] + starsPhase[i]);
+      if (tw > 0.15) {
+        px(starsX[i], starsY[i], tw > 0.75 ? 10 : (tw > 0.4 ? 9 : 8));
+      }
+    }
+
+    // Floor
+    const fy = 78;
+    rect(0, fy, W, H - fy, 5);
+    hrun(0, fy, W, 7);
+    hrun(0, fy + 1, W, 6);
+    for (let x = 0; x < W; x += 8) {
+      hrun(x, fy + 2, 7, 5);
+      px(x + 2, fy + 4, 6);
+      px(x + 5, fy + 6, 7);
+    }
+    // Horizon edge
+    hrun(0, fy, W, 4);
+
+    const ox = shakeX, oy = shakeY;
+    drawWizard(ox, oy);
+    drawParticles(ox, oy);
+    drawProjectile(ox, oy);
+  }
+
+  // Quantize helper for pixel-art feel
+  function q1(v) { return v < 0 ? -((-v + 0.5) | 0) : ((v + 0.5) | 0); }
+  function qStep(v, steps) {
+    return ((v * steps + (v < 0 ? -0.5 : 0.5)) | 0) / steps;
+  }
+
+  // ─── Wizard (~24×32) ──────────────────────────────────────────────
+  function drawWizard(ox, oy) {
+    const qBob = q1(bob);
+    const qBeard = q1(beardSway);
+    const qArm = qStep(armRaise, 8);
+    const qHead = q1(headTilt);
+    const qRobe = q1(robeSway);
+    const qStaff = qStep(staffAngle, 10);
+    const qGem = qStep(gemBright, 6);
+    const qRim = qStep(rimLight, 4);
+
+    const bx = WIZ_X + ox;
+    const by = WIZ_Y + oy + qBob;
+
+    drawStaff(bx, by, qStaff, qArm, qGem);
+
+    // Body origin: robe top-left-ish
+    const cx = bx + 2 + qRobe; // robe left
+    const top = by - 18;
+
+    // ── Robe (wider silhouette) ──
+    // Outline
+    rect(cx - 1, top, 18, 17, 12);
+    // Hem flare outline
+    rect(cx - 3, by - 3, 22, 4, 12);
+    // Main fill
+    rect(cx, top + 1, 16, 15, 14);
+    // Dark fold (left)
+    rect(cx, top + 1, 5, 15, 13);
+    // Light panel / chest
+    rect(cx + 5, top + 2, 7, 6, 15);
+    // Belt
+    hrun(cx, top + 8, 16, 12);
+    hrun(cx + 1, top + 8, 14, 25);
+    px(cx + 8, top + 8, 26);
+    // Hem fill
+    rect(cx - 2, by - 2, 20, 3, 13);
+    rect(cx - 1, by - 1, 18, 2, 14);
+    // Rim light on right edge from gem
+    if (qRim > 0.2) {
+      vrun(cx + 15, top + 2, 13, qRim > 0.55 ? 15 : 14);
+      if (qRim > 0.5) {
+        vrun(cx + 14, top + 4, 9, 15);
+        px(cx + 15, top + 1, 15);
+      }
+    }
+
+    // Feet
+    rect(cx + 2, by, 5, 2, 20);
+    rect(cx + 10, by, 5, 2, 20);
+    px(cx + 3, by, 21);
+    px(cx + 11, by, 21);
+
+    // ── Head ──
+    const hx = bx + 5 + qHead;
+    const hy = top - 7;
+
+    // Neck
+    rect(hx + 4, hy + 6, 4, 2, 16);
+
+    // Face
+    rect(hx + 2, hy + 1, 9, 6, 16);
+    hrun(hx + 3, hy, 7, 17);
+    // Brow
+    hrun(hx + 3, hy + 2, 3, 19);
+    hrun(hx + 7, hy + 2, 3, 19);
+    // Eyes
+    px(hx + 4, hy + 3, 1);
+    px(hx + 8, hy + 3, 1);
+    if (qGem > 0.65) {
+      px(hx + 4, hy + 3, 22);
+      px(hx + 8, hy + 3, 22);
+      px(hx + 5, hy + 3, 11);
+      px(hx + 9, hy + 3, 11);
+    } else {
+      px(hx + 5, hy + 3, 17);
+      px(hx + 9, hy + 3, 17);
+    }
+    // Nose / mouth
+    px(hx + 6, hy + 4, 17);
+    px(hx + 6, hy + 5, 16);
+    hrun(hx + 5, hy + 6, 3, 12);
+
+    // Beard
+    const bs = qBeard;
+    rect(hx + 2, hy + 5, 9, 3, 18);
+    rect(hx + 3 + (bs > 0 ? 1 : 0), hy + 8, 7, 4, 18);
+    rect(hx + 4 + bs, hy + 12, 5, 3, 19);
+    rect(hx + 5 + bs, hy + 15, 3, 2, 19);
+    px(hx + 4, hy + 6, 10);
+    px(hx + 7, hy + 9, 10);
+
+    // ── Hat (pointed, bent) ──
+    const hatX = hx + 1;
+    const hatY = hy;
+    // Brim
+    rect(hatX - 3, hatY, 14, 2, 13);
+    hrun(hatX - 2, hatY - 1, 12, 14);
+    // Cone
+    rect(hatX + 1, hatY - 4, 8, 3, 14);
+    rect(hatX + 2, hatY - 7, 6, 3, 14);
+    rect(hatX + 2, hatY - 9, 5, 2, 13);
+    // Bend tip left
+    rect(hatX, hatY - 10, 4, 2, 14);
+    rect(hatX - 2, hatY - 11, 4, 1, 13);
+    rect(hatX - 3, hatY - 12, 3, 1, 14);
+    px(hatX - 4, hatY - 12, 13);
+    px(hatX - 5, hatY - 12, 14);
+    // Band + buckle
+    hrun(hatX + 1, hatY - 2, 8, 24);
+    px(hatX + 4, hatY - 2, 25);
+    // Rim on hat
+    if (qRim > 0.35) {
+      px(hatX + 8, hatY - 4, 15);
+      px(hatX + 7, hatY - 6, 15);
+      px(hatX + 6, hatY - 8, 15);
+    }
+
+    // Raised arm / sleeve toward staff
+    const lift = (qArm * 9) | 0;
+    const ax = cx + 15;
+    const ay = top + 3 - lift;
+    rect(ax, ay, 5, 5, 12);
+    rect(ax + 1, ay + 1, 4, 3, 14);
+    rect(ax + 4, ay - 1, 3, 3, 16);
+    px(ax + 5, ay, 17);
+
+    // Tucked arm
+    rect(cx - 2, top + 4, 3, 6, 12);
+    rect(cx - 1, top + 5, 2, 4, 13);
+    px(cx - 2, top + 9, 16);
+  }
+
+  function drawStaff(bx, by, qStaff, qArm, qGem) {
+    const baseX = bx + 20;
+    const baseY = by - 16 - ((qArm * 5) | 0);
+    const len = 20;
+    const ang = -1.05 + qStaff;
+
+    for (let i = 0; i <= len; i++) {
+      const sx = (baseX + Math.cos(ang) * i) | 0;
+      const sy = (baseY + Math.sin(ang) * i) | 0;
+      px(sx, sy, 20);
+      if ((i & 1) === 0) px(sx + 1, sy, 21);
+    }
+
+    const tipX = (baseX + Math.cos(ang) * len) | 0;
+    const tipY = (baseY + Math.sin(ang) * len) | 0;
+
+    let gemC = 23;
+    if (qGem > 0.85) gemC = 11;
+    else if (qGem > 0.65) gemC = 25;
+    else if (qGem > 0.45) gemC = 24;
+    else if (qGem > 0.25) gemC = 22;
+
+    if (state === ST_CHARGE && (((perfTime * 18) | 0) & 1) === 0) {
+      gemC = qGem > 0.5 ? 11 : 25;
+    }
+
+    // Setting
+    px(tipX - 1, tipY + 1, 21);
+    px(tipX + 1, tipY + 1, 21);
+    px(tipX, tipY + 2, 20);
+
+    rect(tipX - 1, tipY - 1, 3, 3, gemC);
+    px(tipX, tipY, 11);
+
+    if (qGem > 0.45) {
+      px(tipX - 2, tipY, 22);
+      px(tipX + 2, tipY, 22);
+      px(tipX, tipY - 2, 24);
+      if (qGem > 0.7) {
+        px(tipX - 2, tipY - 1, 23);
+        px(tipX + 2, tipY - 1, 23);
+        px(tipX - 1, tipY - 2, 25);
+        px(tipX + 1, tipY - 2, 25);
+        px(tipX, tipY + 2, 24);
+      }
+    }
+  }
+
+  function drawParticles(ox, oy) {
+    for (let i = 0; i < PART_N; i++) {
+      if (!pAlive[i]) continue;
+      const lifeRatio = pLife[i] / pMaxLife[i];
+      const idx = ((1 - lifeRatio) * (PART_COLORS.length - 0.01)) | 0;
+      const ci = PART_COLORS[idx < 0 ? 0 : (idx >= PART_COLORS.length ? PART_COLORS.length - 1 : idx)];
+      const x = (pX[i] + ox) | 0;
+      const y = (pY[i] + oy) | 0;
+      if (x < 0 || x >= W || y < 0 || y >= H) continue;
+      px(x, y, ci);
+      if (lifeRatio > 0.65 && pKind[i] !== 0) {
+        const ci2 = PART_COLORS[idx > 0 ? idx - 1 : 0];
+        px(x + 1, y, ci2);
+      }
+    }
+  }
+
+  function drawProjectile(ox, oy) {
+    if (!projAlive) return;
+    const x = (projX + ox) | 0;
+    const y = (projY + oy) | 0;
+    rect(x - 1, y - 1, 3, 3, 11);
+    px(x, y, 25);
+    px(x - 2, y, 24);
+    px(x + 2, y, 22);
+    px(x, y - 2, 22);
+    px(x, y + 2, 24);
+    px(x + 3, y, 11);
+    px(x + 4, y, 25);
+  }
+
+  // ─── Fixed timestep loop ──────────────────────────────────────────
+  const STEP = 1 / 60;
+  let acc = 0;
+  let last = 0;
+  let perfTime = 0;
+
+  function frame(now) {
+    if (!last) last = now;
+    let frameDt = (now - last) / 1000;
+    last = now;
+    if (frameDt > 0.1) frameDt = 0.1;
+    acc += frameDt;
+    while (acc >= STEP) {
+      update(STEP);
+      perfTime += STEP;
+      acc -= STEP;
+    }
+    draw();
+    dctx.imageSmoothingEnabled = false;
+    dctx.fillStyle = "#050510";
+    dctx.fillRect(0, 0, display.width, display.height);
+    dctx.drawImage(logical, 0, 0, W, H, 0, 0, display.width, display.height);
+    requestAnimationFrame(frame);
+  }
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,783 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>grok46cursor</title>
+<style>
+html,body{margin:0;width:100%;height:100%;background:#000;overflow:hidden}
+#view{display:block;width:100%;height:100%;image-rendering:pixelated;image-rendering:crisp-edges}
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<script>
+(function () {
+  'use strict';
+
+  var W = 128, H = 96;
+
+  var PAL = [
+    '#080614', /*  0 void        */
+    '#14122c', /*  1 sky         */
+    '#241c48', /*  2 sky mid     */
+    '#d4d0c4', /*  3 moon        */
+    '#888478', /*  4 moon shade  */
+    '#f0ece4', /*  5 pale        */
+    '#ffffff', /*  6 white       */
+    '#2c241c', /*  7 floor       */
+    '#1a1018', /*  8 outline     */
+    '#3a1848', /*  9 hat dark    */
+    '#6a2c90', /* 10 hat         */
+    '#9a50c0', /* 11 hat light   */
+    '#e2b87a', /* 12 skin        */
+    '#c49458', /* 13 skin shade  */
+    '#ece6d4', /* 14 beard       */
+    '#a89c84', /* 15 beard dark  */
+    '#4a2030', /* 16 robe dark   */
+    '#8c3450', /* 17 robe        */
+    '#c85068', /* 18 robe light  */
+    '#3c2a18', /* 19 wood        */
+    '#705028', /* 20 wood light  */
+    '#80d8ff', /* 21 cyan        */
+    '#c070ff', /* 22 purple      */
+    '#304060'  /* 23 magic dark  */
+  ];
+
+  var C_VOID = 0, C_SKY = 1, C_SKYM = 2;
+  var C_MOON = 3, C_MOONS = 4, C_PALE = 5, C_WHITE = 6;
+  var C_FLOOR = 7, C_OUT = 8;
+  var C_HATD = 9, C_HAT = 10, C_HATL = 11;
+  var C_SKIN = 12, C_SKINS = 13;
+  var C_BEARD = 14, C_BEARDS = 15;
+  var C_ROBED = 16, C_ROBE = 17, C_ROBEL = 18;
+  var C_WOOD = 19, C_WOODL = 20;
+  var C_CYAN = 21, C_PURP = 22, C_MDARK = 23;
+
+  var ST_IDLE = 0, ST_CHARGE = 1, ST_CAST = 2, ST_RECOVER = 3;
+  var DUR = [156, 102, 54, 72];
+
+  var ANG_IDLE = 0.48, ANG_CHARGE = -0.18, ANG_CAST = 1.18;
+  var ARM_IDLE = 0.08, ARM_CHARGE = 1.0, ARM_CAST = 0.62;
+
+  var off = document.createElement('canvas');
+  off.width = W;
+  off.height = H;
+  var ctx = off.getContext('2d', { alpha: false });
+  ctx.imageSmoothingEnabled = false;
+
+  var disp = document.getElementById('view');
+  var dctx = disp.getContext('2d', { alpha: false });
+
+  var scale = 1, dw = W, dh = H, dox = 0, doy = 0;
+  var tick = 0, state = ST_IDLE, st = 0, hold = 0, snapN = 0;
+  var acc = 0, last = 0, _c = -1;
+  var ox = 0, oy = 0;
+
+  var staffAng = ANG_IDLE, armRaise = ARM_IDLE, headTiltF = 0;
+  var robeSwayF = 0, beardSwayF = 0, bobF = 0, glowF = 0.22;
+  var fromAng = ANG_IDLE, fromArm = ARM_IDLE, fromHead = 0;
+  var fromRobe = 0, fromGlow = 0.22;
+
+  var qAng = ANG_IDLE, qArm = ARM_IDLE, qHead = 0, qRobe = 0, qBeard = 0, qBob = 0, qGlow = 0.22;
+  var gemX = 48, gemY = 58, handX = 44, handY = 70, shX = 40, shY = 68;
+  var ftX = 38, ftY = 85;
+  var shakeT = 0, shakeX = 0, shakeY = 0;
+  var gemFlick = C_CYAN;
+  var blinkT = 0;
+
+  var boltOn = 0, boltX = 0, boltY = 0, boltVX = 0, boltVY = 0, boltLife = 0;
+  var burstR = 0;
+
+  var MAX = 96;
+  var pOn = new Uint8Array(MAX);
+  var pX = new Float32Array(MAX);
+  var pY = new Float32Array(MAX);
+  var pVX = new Float32Array(MAX);
+  var pVY = new Float32Array(MAX);
+  var pLife = new Int16Array(MAX);
+  var pMax = new Int16Array(MAX);
+  var pKind = new Uint8Array(MAX);
+  var pAng = new Float32Array(MAX);
+  var pRad = new Float32Array(MAX);
+
+  var STAR_N = 16;
+  var STAR_X = new Uint8Array([4, 12, 21, 29, 46, 55, 67, 78, 88, 96, 114, 122, 8, 109, 61, 73]);
+  var STAR_Y = new Uint8Array([6, 15, 9, 23, 5, 19, 12, 4, 21, 8, 6, 17, 27, 25, 3, 22]);
+  var STAR_P = new Uint8Array([0, 13, 27, 39, 44, 58, 66, 74, 81, 93, 101, 111, 118, 126, 134, 147]);
+
+  var STONE_X = new Uint8Array([3, 14, 26, 39, 51, 64, 76, 89, 101, 113, 7, 33, 58, 84, 108]);
+  var STONE_W = new Uint8Array([5, 4, 6, 4, 5, 3, 5, 4, 6, 4, 2, 3, 2, 3, 2]);
+  var STONE_Y = new Uint8Array([88, 88, 88, 88, 88, 88, 88, 88, 88, 88, 90, 91, 90, 92, 91]);
+
+  var RING_DX = [1, 1, 0, -1, -1, -1, 0, 1, 2, 0, -2, 0];
+  var RING_DY = [0, 1, 1, 1, 0, -1, -1, -1, 0, 2, 0, -2];
+
+  var seed = 0xA5A5C0DE;
+  function rnd() {
+    seed = (Math.imul(seed, 1664525) + 1013904223) | 0;
+    return (seed >>> 0) / 4294967296;
+  }
+
+  function setC(ci) {
+    if (ci !== _c) {
+      _c = ci;
+      ctx.fillStyle = PAL[ci];
+    }
+  }
+
+  function rect(x, y, w, h, ci) {
+    x = (x + ox) | 0;
+    y = (y + oy) | 0;
+    w |= 0;
+    h |= 0;
+    if (w <= 0 || h <= 0) return;
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > W) w = W - x;
+    if (y + h > H) h = H - y;
+    if (w <= 0 || h <= 0) return;
+    setC(ci);
+    ctx.fillRect(x, y, w, h);
+  }
+
+  function pset(x, y, ci) {
+    x = (x + ox) | 0;
+    y = (y + oy) | 0;
+    if (x < 0 || y < 0 || x >= W || y >= H) return;
+    setC(ci);
+    ctx.fillRect(x, y, 1, 1);
+  }
+
+  function line(x0, y0, x1, y1, ci) {
+    x0 = (x0 + ox) | 0;
+    y0 = (y0 + oy) | 0;
+    x1 = (x1 + ox) | 0;
+    y1 = (y1 + oy) | 0;
+    var dx = x1 - x0; if (dx < 0) dx = -dx;
+    var dy = y1 - y0; if (dy < 0) dy = -dy;
+    dy = -dy;
+    var sx = x0 < x1 ? 1 : -1;
+    var sy = y0 < y1 ? 1 : -1;
+    var err = dx + dy, e2;
+    setC(ci);
+    for (;;) {
+      if (x0 >= 0 && y0 >= 0 && x0 < W && y0 < H) ctx.fillRect(x0, y0, 1, 1);
+      if (x0 === x1 && y0 === y1) break;
+      e2 = err << 1;
+      if (e2 >= dy) { err += dy; x0 += sx; }
+      if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+  }
+
+  function clamp01(t) {
+    return t < 0 ? 0 : t > 1 ? 1 : t;
+  }
+
+  function smoothstep(t) {
+    t = clamp01(t);
+    return t * t * (3 - 2 * t);
+  }
+
+  function easeOutCubic(t) {
+    t = clamp01(t);
+    t = 1 - t;
+    return 1 - t * t * t;
+  }
+
+  function lerp(a, b, t) {
+    return a + (b - a) * t;
+  }
+
+  function iround(v) {
+    return v < 0 ? -(((-v) + 0.5) | 0) : (v + 0.5) | 0;
+  }
+
+  function spawn(x, y, vx, vy, life, kind, ang, rad) {
+    var i, n = MAX;
+    for (i = 14; i < n; i++) {
+      if (!pOn[i]) {
+        pOn[i] = 1;
+        pX[i] = x;
+        pY[i] = y;
+        pVX[i] = vx;
+        pVY[i] = vy;
+        pLife[i] = life;
+        pMax[i] = life;
+        pKind[i] = kind;
+        pAng[i] = ang;
+        pRad[i] = rad;
+        return;
+      }
+    }
+  }
+
+  function sparkCol(lf) {
+    if (lf > 0.78) return C_WHITE;
+    if (lf > 0.55) return C_PALE;
+    if (lf > 0.36) return C_CYAN;
+    if (lf > 0.16) return C_PURP;
+    return C_MDARK;
+  }
+
+  function geomFromQuant() {
+    var ang = qAng;
+    var bob = qBob;
+    ftX = 38;
+    ftY = 85;
+    shX = ftX + 5;
+    shY = ftY - 20 - bob - ((qArm * 3 + 0.3) | 0);
+    var alen = 5 + ((qArm * 3) | 0);
+    handX = shX + iround(Math.sin(ang) * alen) + 1;
+    handY = shY - iround(Math.cos(ang) * (3 + qArm * 5));
+    gemX = handX + iround(Math.sin(ang) * 17);
+    gemY = handY - iround(Math.cos(ang) * 17);
+  }
+
+  function snapshot() {
+    qAng = staffAng;
+    qArm = armRaise;
+    qHead = headTiltF < -0.32 ? -1 : headTiltF > 0.32 ? 1 : 0;
+    qRobe = robeSwayF < -0.42 ? -1 : robeSwayF > 0.42 ? 1 : 0;
+    qGlow = glowF;
+    if (state === ST_IDLE) {
+      qBob = (snapN >> 1) & 1;
+      qBeard = ((snapN % 6) === 1) ? 1 : ((snapN % 6) === 4) ? -1 : 0;
+    } else if (state === ST_RECOVER && st > 40) {
+      qBob = (snapN >> 1) & 1;
+      qBeard = (snapN & 2) ? 1 : 0;
+    } else {
+      qBob = 0;
+      qBeard = state === ST_CHARGE ? -1 : (state === ST_CAST ? 1 : 0);
+    }
+    if (state === ST_CHARGE || state === ST_CAST) {
+      var f = snapN & 7;
+      if (f === 0 || f === 4) gemFlick = C_WHITE;
+      else if (f === 1 || f === 5) gemFlick = C_CYAN;
+      else if (f === 2 || f === 6) gemFlick = C_PURP;
+      else gemFlick = C_PALE;
+    } else {
+      gemFlick = (snapN & 4) ? C_CYAN : C_PURP;
+    }
+    snapN++;
+    geomFromQuant();
+  }
+
+  function enter(s) {
+    fromAng = staffAng;
+    fromArm = armRaise;
+    fromHead = headTiltF;
+    fromRobe = robeSwayF;
+    fromGlow = glowF;
+    state = s;
+    st = 0;
+    hold = 0;
+    snapshot();
+    if (s === ST_CAST) ignite();
+    if (s === ST_IDLE) boltOn = 0;
+  }
+
+  function ignite() {
+    var i, a, sp, c, s;
+    shakeT = 16;
+    burstR = 1;
+    boltOn = 1;
+    boltX = gemX;
+    boltY = gemY;
+    boltVX = 2.35;
+    boltVY = -0.08;
+    boltLife = 52;
+    for (i = 0; i < 14; i++) {
+      c = Math.cos(i * 0.44879895);
+      s = Math.sin(i * 0.44879895);
+      sp = 1.35 + (i & 7) * 0.18;
+      pOn[i] = 1;
+      pKind[i] = 2;
+      pX[i] = gemX + c * 2;
+      pY[i] = gemY + s * 2;
+      pVX[i] = c * sp;
+      pVY[i] = s * sp * 0.88;
+      pLife[i] = 20 + (i & 7);
+      pMax[i] = pLife[i];
+    }
+    for (i = 0; i < 22; i++) {
+      a = i * 0.2856 + rnd() * 0.2;
+      sp = 0.9 + rnd() * 2.1;
+      spawn(gemX, gemY, Math.cos(a) * sp, Math.sin(a) * sp * 0.9, 16 + ((rnd() * 14) | 0), 2, a, 0);
+    }
+  }
+
+  function applyPose() {
+    var u, e, dip;
+    if (state === ST_IDLE) {
+      staffAng = lerp(staffAng, ANG_IDLE, 0.12);
+      armRaise = lerp(armRaise, ARM_IDLE, 0.12);
+      headTiltF = lerp(headTiltF, 0, 0.1);
+      robeSwayF = Math.sin(tick * 0.074) * 0.9;
+      beardSwayF = Math.sin(tick * 0.088 + 0.7) * 0.95;
+      bobF = (Math.sin(tick * 0.098) + 1) * 0.5;
+      glowF = 0.2 + Math.sin(tick * 0.11) * 0.05;
+      return;
+    }
+    if (state === ST_CHARGE) {
+      u = st / DUR[ST_CHARGE];
+      if (u > 1) u = 1;
+      e = smoothstep(u);
+      dip = Math.sin(u * 3.14159265) * (1 - e) * 0.22;
+      staffAng = lerp(fromAng, ANG_CHARGE, e) + dip;
+      armRaise = lerp(fromArm, ARM_CHARGE, e);
+      headTiltF = lerp(fromHead, -0.85, e);
+      robeSwayF = lerp(fromRobe, -0.8, e);
+      glowF = lerp(fromGlow, 1, e);
+      return;
+    }
+    if (state === ST_CAST) {
+      u = st / DUR[ST_CAST];
+      if (u > 1) u = 1;
+      e = u < 0.28 ? easeOutCubic(u / 0.28) : 1;
+      staffAng = lerp(fromAng, ANG_CAST, e);
+      armRaise = lerp(fromArm, ARM_CAST, e);
+      headTiltF = lerp(fromHead, 0.9, e);
+      robeSwayF = lerp(fromRobe, 1.05, e);
+      glowF = 1;
+      return;
+    }
+    u = st / DUR[ST_RECOVER];
+    if (u > 1) u = 1;
+    e = smoothstep(u);
+    staffAng = lerp(fromAng, ANG_IDLE, e);
+    armRaise = lerp(fromArm, ARM_IDLE, e);
+    headTiltF = lerp(fromHead, 0, e);
+    robeSwayF = lerp(fromRobe, 0, e);
+    glowF = lerp(fromGlow, 0.22, e);
+  }
+
+  function updateChargeOrbits() {
+    var i, u, ang, rr;
+    u = st / DUR[ST_CHARGE];
+    if (u > 1) u = 1;
+    for (i = 0; i < 14; i++) {
+      ang = tick * 0.14 + i * 0.44879895;
+      rr = 12.2 - 9.4 * u;
+      if (rr < 1.6) rr = 1.6;
+      pOn[i] = 1;
+      pKind[i] = 1;
+      pAng[i] = ang;
+      pRad[i] = rr;
+      pX[i] = gemX + Math.cos(ang) * rr;
+      pY[i] = gemY + Math.sin(ang) * rr * 0.68;
+      pVX[i] = 0;
+      pVY[i] = 0;
+      pLife[i] = 12;
+      pMax[i] = 12;
+    }
+  }
+
+  function updateParticles() {
+    var i, n = MAX;
+    if (state === ST_CHARGE) updateChargeOrbits();
+    for (i = 0; i < n; i++) {
+      if (!pOn[i]) continue;
+      if (state === ST_CHARGE && i < 14) continue;
+      pLife[i]--;
+      if (pLife[i] <= 0) {
+        pOn[i] = 0;
+        pKind[i] = 0;
+        continue;
+      }
+      pX[i] += pVX[i];
+      pY[i] += pVY[i];
+      if (pKind[i] === 2) {
+        pVX[i] *= 0.962;
+        pVY[i] *= 0.962;
+        pVY[i] += 0.018;
+      } else if (pKind[i] === 3) {
+        pVX[i] *= 0.94;
+        pVY[i] += 0.01;
+      }
+    }
+  }
+
+  function updateBolt() {
+    if (!boltOn) return;
+    boltLife--;
+    boltX += boltVX;
+    boltY += boltVY;
+    spawn(boltX, boltY, -0.6 - rnd() * 0.4, (rnd() - 0.5) * 0.8, 10 + ((rnd() * 8) | 0), 3, 0, 0);
+    if ((tick & 1) === 0) {
+      spawn(boltX - 1, boltY + (rnd() < 0.5 ? -1 : 1), -0.25, (rnd() - 0.5) * 0.35, 7, 3, 0, 0);
+    }
+    if (boltX > 134 || boltLife <= 0) boltOn = 0;
+  }
+
+  function update() {
+    tick++;
+    st++;
+    if (st >= DUR[state]) enter((state + 1) & 3);
+    applyPose();
+    hold++;
+    if (hold >= 6) {
+      hold = 0;
+      snapshot();
+    }
+    if (shakeT > 0) {
+      shakeT--;
+      var amp = shakeT > 9 ? 2 : 1;
+      shakeX = (tick & 2) ? amp : -amp;
+      shakeY = (tick & 4) ? 1 : 0;
+    } else {
+      shakeX = 0;
+      shakeY = 0;
+    }
+    if (burstR > 0 && burstR < 14) burstR++;
+    else if (state !== ST_CAST) burstR = 0;
+    blinkT++;
+    if (blinkT > 150) blinkT = 0;
+    updateParticles();
+    updateBolt();
+  }
+
+  function drawSky() {
+    rect(0, 0, W, 72, C_VOID);
+    rect(0, 72, W, 10, C_SKY);
+    rect(0, 82, W, 4, C_SKYM);
+    pset(17, 81, C_SKYM);
+    pset(42, 80, C_SKYM);
+    pset(70, 81, C_SKY);
+    pset(98, 80, C_SKY);
+  }
+
+  function drawMoon(mx, my) {
+    rect(mx + 3, my, 5, 1, C_MOON);
+    rect(mx + 2, my + 1, 7, 1, C_MOON);
+    rect(mx + 1, my + 2, 9, 2, C_MOON);
+    rect(mx, my + 4, 11, 3, C_MOON);
+    rect(mx + 1, my + 7, 9, 2, C_MOON);
+    rect(mx + 2, my + 9, 7, 1, C_MOON);
+    rect(mx + 3, my + 10, 5, 1, C_MOON);
+    rect(mx + 1, my + 3, 2, 5, C_MOONS);
+    pset(mx + 2, my + 2, C_MOONS);
+    pset(mx + 1, my + 8, C_MOONS);
+    pset(mx + 6, my + 2, C_PALE);
+    pset(mx + 7, my + 3, C_WHITE);
+    pset(mx + 5, my + 5, C_MOONS);
+    pset(mx + 8, my + 6, C_MOONS);
+    pset(mx + 4, my + 7, C_MOONS);
+    pset(mx + 7, my + 8, C_MOONS);
+  }
+
+  function drawStars() {
+    var i, ph, ci;
+    for (i = 0; i < STAR_N; i++) {
+      ph = (tick + STAR_P[i] * 3) % 90;
+      if (ph >= 76) continue;
+      if (ph < 5) ci = C_WHITE;
+      else if (ph < 22) ci = C_PALE;
+      else if (ph < 50) ci = C_MOON;
+      else ci = C_SKYM;
+      pset(STAR_X[i], STAR_Y[i], ci);
+    }
+  }
+
+  function drawFloor() {
+    rect(0, 86, W, 1, C_OUT);
+    rect(0, 87, W, 1, C_MOONS);
+    rect(0, 88, W, 8, C_FLOOR);
+    var i;
+    for (i = 0; i < 15; i++) {
+      rect(STONE_X[i], STONE_Y[i], STONE_W[i], 1, (i & 1) ? C_MOONS : C_WOOD);
+    }
+    pset(18, 90, C_WOOD);
+    pset(47, 92, C_OUT);
+    pset(81, 89, C_WOOD);
+    pset(120, 91, C_OUT);
+    rect(ftX - 8, 85, 16, 1, C_VOID);
+    rect(ftX - 6, 84, 12, 1, C_OUT);
+  }
+
+  function drawGem(gx, gy, glow) {
+    var core = glow > 0.7 ? C_WHITE : (glow > 0.4 ? gemFlick : C_PURP);
+    var ring = glow > 0.65 ? C_CYAN : (glow > 0.3 ? gemFlick : C_MDARK);
+    pset(gx, gy, core);
+    pset(gx - 1, gy, ring);
+    pset(gx + 1, gy, ring);
+    pset(gx, gy - 1, ring);
+    pset(gx, gy + 1, ring);
+    if (glow > 0.38) {
+      pset(gx - 1, gy - 1, C_PURP);
+      pset(gx + 1, gy - 1, C_PURP);
+      pset(gx - 1, gy + 1, C_MDARK);
+      pset(gx + 1, gy + 1, C_MDARK);
+    }
+    if (glow > 0.72) {
+      pset(gx, gy - 2, C_CYAN);
+      pset(gx, gy + 2, C_CYAN);
+      pset(gx - 2, gy, C_CYAN);
+      pset(gx + 2, gy, C_PALE);
+    }
+    if (state === ST_CHARGE && (tick & 3) === 0) pset(gx, gy, C_WHITE);
+    if (glow > 0.45) {
+      var fy = 85;
+      pset(gx, fy, C_MDARK);
+      if (glow > 0.7) {
+        pset(gx - 1, fy, C_PURP);
+        pset(gx + 1, fy, C_CYAN);
+      }
+    }
+  }
+
+  function drawHat(hx, hy, rim) {
+    pset(hx + 1, hy + 0, C_OUT);
+    pset(hx + 2, hy + 0, C_HATL);
+    rect(hx + 0, hy + 1, 4, 1, C_OUT);
+    pset(hx + 1, hy + 1, C_HAT);
+    pset(hx + 2, hy + 1, C_HATL);
+    rect(hx + 0, hy + 2, 5, 1, C_OUT);
+    rect(hx + 1, hy + 2, 3, 1, C_HAT);
+    pset(hx + 2, hy + 2, C_HATL);
+    rect(hx + 1, hy + 3, 5, 1, C_OUT);
+    rect(hx + 2, hy + 3, 3, 1, C_HAT);
+    pset(hx + 3, hy + 3, C_HATL);
+    rect(hx + 2, hy + 4, 5, 1, C_OUT);
+    rect(hx + 3, hy + 4, 3, 1, C_HAT);
+    rect(hx + 2, hy + 5, 6, 1, C_OUT);
+    rect(hx + 3, hy + 5, 4, 1, C_HAT);
+    pset(hx + 4, hy + 5, C_HATL);
+    rect(hx + 3, hy + 6, 6, 1, C_OUT);
+    rect(hx + 4, hy + 6, 4, 1, C_HAT);
+    rect(hx + 3, hy + 7, 7, 1, C_OUT);
+    rect(hx + 4, hy + 7, 5, 1, C_HAT);
+    pset(hx + 5, hy + 7, C_HATL);
+    rect(hx + 2, hy + 8, 9, 1, C_OUT);
+    rect(hx + 3, hy + 8, 7, 1, C_HAT);
+    pset(hx + 4, hy + 8, C_HATD);
+    rect(hx + 1, hy + 9, 12, 1, C_OUT);
+    rect(hx + 2, hy + 9, 10, 1, C_HAT);
+    pset(hx + 3, hy + 9, C_HATL);
+    rect(hx + 0, hy + 10, 14, 2, C_OUT);
+    rect(hx + 1, hy + 10, 12, 1, C_HAT);
+    rect(hx + 2, hy + 11, 10, 1, C_HATD);
+    pset(hx + 4, hy + 10, C_HATL);
+    pset(hx + 8, hy + 10, C_HATL);
+    rect(hx + 3, hy + 11, 8, 1, C_ROBED);
+    pset(hx + 6, hy + 11, C_PALE);
+    pset(hx + 13, hy + 10, rim);
+    pset(hx + 12, hy + 9, rim);
+    pset(hx + 10, hy + 7, rim);
+    pset(hx + 8, hy + 5, rim);
+  }
+
+  function drawWizard() {
+    var bob = qBob;
+    var ht = qHead;
+    var rs = qRobe;
+    var bs = qBeard;
+    var fy = ftY - bob;
+    var fx = ftX;
+    var glow = qGlow;
+    var rim = glow > 0.72 ? C_WHITE : glow > 0.48 ? C_CYAN : glow > 0.28 ? C_PURP : C_ROBEL;
+    var hx = fx - 5 + ht;
+    var hy = fy - 35;
+
+    rect(fx - 8 + rs, fy - 2, 17, 2, C_OUT);
+    rect(fx - 7 + rs, fy - 6, 15, 4, C_OUT);
+    rect(fx - 6, fy - 11, 13, 5, C_OUT);
+    rect(fx - 5, fy - 16, 11, 5, C_OUT);
+    rect(fx - 4, fy - 20, 9, 4, C_OUT);
+
+    rect(fx - 7 + rs, fy - 2, 15, 2, C_ROBE);
+    rect(fx - 6 + rs, fy - 6, 13, 4, C_ROBE);
+    rect(fx - 5, fy - 11, 11, 5, C_ROBE);
+    rect(fx - 4, fy - 16, 9, 5, C_ROBE);
+    rect(fx - 3, fy - 20, 7, 4, C_ROBE);
+
+    rect(fx - 6 + rs, fy - 5, 3, 3, C_ROBED);
+    rect(fx - 5, fy - 10, 3, 4, C_ROBED);
+    rect(fx - 4, fy - 15, 2, 4, C_ROBED);
+    rect(fx - 3, fy - 19, 2, 3, C_ROBED);
+
+    rect(fx + 2, fy - 5, 3, 3, C_ROBEL);
+    rect(fx + 2, fy - 10, 3, 4, C_ROBEL);
+    rect(fx + 2, fy - 15, 2, 3, C_ROBEL);
+    rect(fx + 1, fy - 19, 2, 2, C_ROBEL);
+
+    pset(fx - 1, fy - 8, C_ROBED);
+    pset(fx - 1, fy - 12, C_ROBED);
+    pset(fx + 1, fy - 7, C_ROBEL);
+    pset(fx, fy - 14, C_ROBED);
+
+    rect(fx - 4, fy - 16, 9, 1, C_OUT);
+    rect(fx - 1, fy - 16, 3, 1, C_PALE);
+    pset(fx, fy - 16, C_MOON);
+
+    pset(fx - 1 + rs, fy - 2, C_OUT);
+    pset(fx + rs, fy - 1, C_OUT);
+
+    rect(fx - 6, fy - 1, 4, 2, C_WOOD);
+    rect(fx + 2, fy - 1, 4, 2, C_WOOD);
+    pset(fx - 5, fy, C_WOODL);
+    pset(fx + 4, fy, C_WOODL);
+    pset(fx - 6, fy, C_OUT);
+    pset(fx + 5, fy, C_OUT);
+
+    rect(fx - 7, fy - 18, 3, 4, C_OUT);
+    rect(fx - 6, fy - 17, 2, 3, C_ROBED);
+    pset(fx - 6, fy - 15, C_SKINS);
+
+    rect(hx + 2, hy + 13, 8, 6, C_OUT);
+    rect(hx + 3, hy + 14, 6, 5, C_SKIN);
+    rect(hx + 3, hy + 14, 2, 2, C_SKINS);
+    if (blinkT >= 146) {
+      rect(hx + 4, hy + 16, 2, 1, C_SKINS);
+      rect(hx + 7, hy + 16, 2, 1, C_SKINS);
+    } else {
+      pset(hx + 4, hy + 16, C_OUT);
+      pset(hx + 7, hy + 16, C_OUT);
+    }
+    pset(hx + 6, hy + 17, C_SKINS);
+
+    rect(hx + 2 + bs, hy + 18, 8, 3, C_OUT);
+    rect(hx + 3 + bs, hy + 21, 6, 4, C_OUT);
+    rect(hx + 4 + bs, hy + 25, 4, 4, C_OUT);
+    pset(hx + 5 + bs, hy + 29, C_OUT);
+    rect(hx + 3 + bs, hy + 18, 6, 3, C_BEARD);
+    rect(hx + 4 + bs, hy + 21, 4, 4, C_BEARD);
+    rect(hx + 5 + bs, hy + 25, 2, 3, C_BEARD);
+    rect(hx + 3 + bs, hy + 19, 2, 2, C_BEARDS);
+    pset(hx + 6 + bs, hy + 23, C_BEARDS);
+    pset(hx + 5 + bs, hy + 27, C_BEARDS);
+
+    drawHat(hx + ht, hy, rim);
+
+    pset(fx + 5, fy - 12, rim);
+    pset(fx + 6, fy - 8, rim);
+    pset(fx + 7 + rs, fy - 4, rim);
+    pset(hx + 9 + bs, hy + 20, rim);
+    if (glow > 0.5) {
+      pset(fx + 5, fy - 18, rim);
+      pset(fx + 7 + rs, fy - 3, rim);
+      pset(hx + 9, hy + 15, rim);
+    }
+    if (glow > 0.8) {
+      pset(hx + 11 + ht, hy + 6, C_CYAN);
+      pset(fx + 6, fy - 11, C_CYAN);
+      pset(hx + 8 + bs, hy + 22, C_CYAN);
+    }
+
+    line(shX, shY, handX, handY, C_OUT);
+    line(shX, shY + 1, handX, handY + 1, C_ROBE);
+    pset(shX + 1, shY, C_ROBEL);
+    pset(handX, handY, C_SKIN);
+    pset(handX + 1, handY, C_SKINS);
+    pset(handX, handY + 1, C_SKIN);
+
+    line(handX, handY + 1, gemX, gemY + 1, C_OUT);
+    line(handX, handY, gemX, gemY, C_WOOD);
+    pset(handX, handY + 1, C_WOODL);
+    pset((handX + gemX) >> 1, ((handY + gemY) >> 1), C_WOODL);
+    pset(((handX * 3 + gemX) >> 2), ((handY * 3 + gemY) >> 2) + 1, C_WOODL);
+
+    drawGem(gemX, gemY, glow);
+  }
+
+  function drawBurst() {
+    if (burstR <= 0 || burstR > 13) return;
+    var r = 1 + (burstR >> 1);
+    var i, ci;
+    ci = burstR < 3 ? C_WHITE : burstR < 7 ? C_PALE : burstR < 10 ? C_CYAN : C_PURP;
+    for (i = 0; i < 12; i++) {
+      pset(gemX + RING_DX[i] * r, gemY + RING_DY[i] * r, ci);
+      if (burstR < 6) pset(gemX + RING_DX[i] * (r > 1 ? r - 1 : 1), gemY + RING_DY[i] * (r > 1 ? r - 1 : 1), C_WHITE);
+    }
+    if (burstR < 4) rect(gemX - 1, gemY - 1, 3, 3, C_WHITE);
+  }
+
+  function drawBolt() {
+    if (!boltOn) return;
+    var bx = iround(boltX);
+    var by = iround(boltY);
+    pset(bx, by, C_WHITE);
+    pset(bx + 1, by, C_PALE);
+    pset(bx + 2, by, C_CYAN);
+    pset(bx - 1, by, C_CYAN);
+    pset(bx - 2, by, C_PURP);
+    pset(bx - 3, by, C_MDARK);
+    pset(bx, by - 1, C_CYAN);
+    pset(bx, by + 1, C_PURP);
+    pset(bx + 1, by - 1, C_PURP);
+  }
+
+  function drawParticles() {
+    var i, lf, ci, px, py, n = MAX;
+    for (i = 0; i < n; i++) {
+      if (!pOn[i]) continue;
+      lf = pMax[i] > 0 ? pLife[i] / pMax[i] : 0;
+      ci = sparkCol(lf);
+      px = iround(pX[i]);
+      py = iround(pY[i]);
+      pset(px, py, ci);
+      if (pKind[i] === 1 || lf > 0.74) {
+        pset(px, py - 1, lf > 0.85 ? C_WHITE : ci);
+      }
+    }
+  }
+
+  function present() {
+    var iw = window.innerWidth | 0;
+    var ih = window.innerHeight | 0;
+    if (disp.width !== iw || disp.height !== ih) {
+      disp.width = iw;
+      disp.height = ih;
+    }
+    dctx.imageSmoothingEnabled = false;
+    if (dctx.webkitImageSmoothingEnabled !== undefined) dctx.webkitImageSmoothingEnabled = false;
+    if (dctx.mozImageSmoothingEnabled !== undefined) dctx.mozImageSmoothingEnabled = false;
+    if (dctx.msImageSmoothingEnabled !== undefined) dctx.msImageSmoothingEnabled = false;
+    scale = (iw / W) | 0;
+    var s2 = (ih / H) | 0;
+    if (s2 < scale) scale = s2;
+    if (scale < 1) scale = 1;
+    dw = W * scale;
+    dh = H * scale;
+    dox = (iw - dw) >> 1;
+    doy = (ih - dh) >> 1;
+    dctx.fillStyle = PAL[0];
+    dctx.fillRect(0, 0, iw, ih);
+    dctx.drawImage(off, 0, 0, W, H, dox, doy, dw, dh);
+  }
+
+  function render() {
+    _c = -1;
+    ctx.imageSmoothingEnabled = false;
+    ox = shakeX;
+    oy = shakeY;
+    drawSky();
+    drawStars();
+    drawMoon(103, 7);
+    drawFloor();
+    drawWizard();
+    drawBurst();
+    drawParticles();
+    drawBolt();
+    present();
+  }
+
+  function frame(now) {
+    if (!last) last = now;
+    var dt = now - last;
+    last = now;
+    if (dt > 100) dt = 100;
+    acc += dt;
+    while (acc >= 1000 / 60) {
+      update();
+      acc -= 1000 / 60;
+    }
+    render();
+    requestAnimationFrame(frame);
+  }
+
+  snapshot();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

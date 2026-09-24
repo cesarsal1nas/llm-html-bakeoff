@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>grok46hermes</title>
+<style>
+html,body{margin:0;padding:0;width:100%;height:100%;background:#000;overflow:hidden}
+#d{position:absolute;image-rendering:pixelated;image-rendering:crisp-edges}
+</style>
+</head>
+<body>
+<canvas id="d"></canvas>
+<script>
+(function () {
+  'use strict';
+
+  var W = 128, H = 96;
+  var PAL = [
+    '#08051a', '#100c28', '#1a1540', '#2c2466',
+    '#d8d4c6', '#9a9688', '#f4f0e4', '#3a342c',
+    '#5c5344', '#1c1028', '#3c2468', '#5a3c90',
+    '#e2c08a', '#c49868', '#e8e2d8', '#a8a094',
+    '#1a1230', '#3a2858', '#4a3018', '#6e4824',
+    '#fff6c8', '#ffc430', '#40d8ff', '#b050ff'
+  ];
+  var C_VOID = 0, C_SKY = 1, C_SKYM = 2, C_SKYH = 3;
+  var C_MOON = 4, C_MOONS = 5, C_WHITE = 6;
+  var C_FLRD = 7, C_FLR = 8;
+  var C_OUT = 9, C_ROBE = 10, C_ROBEL = 11;
+  var C_SKIN = 12, C_SKINS = 13, C_BEARD = 14, C_BEARDS = 15;
+  var C_HAT = 16, C_HATH = 17, C_STAFF = 18, C_STAFFH = 19;
+  var C_MW = 20, C_GOLD = 21, C_CYAN = 22, C_PURP = 23;
+
+  var ST_IDLE = 0, ST_CHARGE = 1, ST_CAST = 2, ST_RECOVER = 3;
+  var DUR = [168, 102, 54, 84];
+  var ANG = [-0.42, -1.32, -0.88, -0.55];
+  var ARM = [0.12, 1.0, 0.82, 0.28];
+  var TILT = [0.0, -0.55, 0.25, 0.05];
+  var GLOW = [0.12, 0.82, 1.0, 0.32];
+  var RING_DX = [1, 1, 0, -1, -1, -1, 0, 1];
+  var RING_DY = [0, 1, 1, 1, 0, -1, -1, -1];
+
+  var off = document.createElement('canvas');
+  off.width = W;
+  off.height = H;
+  var ctx = off.getContext('2d', { alpha: false });
+  var disp = document.getElementById('d');
+  var dctx = disp.getContext('2d', { alpha: false });
+
+  var scale = 1;
+  var tick = 0;
+  var state = ST_IDLE;
+  var st = 0;
+  var acc = 0;
+  var last = 0;
+  var _c = -1;
+
+  var staffAng = ANG[0];
+  var armRaise = ARM[0];
+  var headTiltF = 0;
+  var robeSwayF = 0;
+  var beardSwayF = 0;
+  var bobF = 0;
+  var glowF = GLOW[0];
+  var gemX = 0, gemY = 0, handX = 0, handY = 0;
+  var shX = 0, shY = 0, ftX = 40, ftY = 86;
+  var shakeT = 0, shakeX = 0, shakeY = 0;
+
+  var boltOn = 0, boltX = 0, boltY = 0, boltVX = 0, boltVY = 0, boltLife = 0;
+
+  var MAX = 80;
+  var pOn = new Uint8Array(MAX);
+  var pX = new Float32Array(MAX);
+  var pY = new Float32Array(MAX);
+  var pVX = new Float32Array(MAX);
+  var pVY = new Float32Array(MAX);
+  var pLife = new Int16Array(MAX);
+  var pMax = new Int16Array(MAX);
+  var pGrav = new Float32Array(MAX);
+  var pKind = new Uint8Array(MAX);
+
+  var STAR_N = 16;
+  var STAR_X = new Uint8Array([3, 11, 19, 27, 47, 56, 69, 81, 91, 97, 117, 124, 7, 112, 63, 74]);
+  var STAR_Y = new Uint8Array([5, 14, 8, 22, 6, 18, 11, 4, 20, 9, 7, 16, 28, 26, 3, 24]);
+  var STAR_P = new Uint8Array([0, 11, 23, 37, 41, 53, 67, 71, 83, 97, 103, 109, 113, 127, 131, 149]);
+
+  var seed = 0xC0FFEE41;
+  function rnd() {
+    seed = (Math.imul(seed, 1664525) + 1013904223) | 0;
+    return (seed >>> 0) / 4294967296;
+  }
+
+  function setC(ci) {
+    if (ci !== _c) {
+      _c = ci;
+      ctx.fillStyle = PAL[ci];
+    }
+  }
+
+  function rect(x, y, w, h, ci) {
+    x |= 0; y |= 0; w |= 0; h |= 0;
+    if (w <= 0 || h <= 0) return;
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > W) w = W - x;
+    if (y + h > H) h = H - y;
+    if (w <= 0 || h <= 0) return;
+    setC(ci);
+    ctx.fillRect(x, y, w, h);
+  }
+
+  function pset(x, y, ci) {
+    x |= 0; y |= 0;
+    if (x < 0 || y < 0 || x >= W || y >= H) return;
+    setC(ci);
+    ctx.fillRect(x, y, 1, 1);
+  }
+
+  function line(x0, y0, x1, y1, ci) {
+    x0 |= 0; y0 |= 0; x1 |= 0; y1 |= 0;
+    var dx = x1 - x0; if (dx < 0) dx = -dx;
+    var dy = y1 - y0; if (dy < 0) dy = -dy;
+    dy = -dy;
+    var sx = x0 < x1 ? 1 : -1;
+    var sy = y0 < y1 ? 1 : -1;
+    var err = dx + dy;
+    setC(ci);
+    for (;;) {
+      if (x0 >= 0 && y0 >= 0 && x0 < W && y0 < H) ctx.fillRect(x0, y0, 1, 1);
+      if (x0 === x1 && y0 === y1) break;
+      var e2 = err << 1;
+      if (e2 >= dy) { err += dy; x0 += sx; }
+      if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+  }
+
+  function clamp01(t) {
+    return t < 0 ? 0 : t > 1 ? 1 : t;
+  }
+
+  function smoothstep(t) {
+    t = clamp01(t);
+    return t * t * (3 - 2 * t);
+  }
+
+  function spawn(x, y, vx, vy, life, grav, kind) {
+    var i, n = MAX;
+    for (i = 12; i < n; i++) {
+      if (!pOn[i]) {
+        pOn[i] = 1;
+        pX[i] = x;
+        pY[i] = y;
+        pVX[i] = vx;
+        pVY[i] = vy;
+        pLife[i] = life;
+        pMax[i] = life;
+        pGrav[i] = grav;
+        pKind[i] = kind;
+        return;
+      }
+    }
+  }
+
+  function evalPose() {
+    var prev = state === 0 ? 3 : state - 1;
+    var u = st / DUR[state];
+    var t;
+    if (state === ST_IDLE) t = smoothstep(clamp01(u * 1.8));
+    else if (state === ST_CAST) t = smoothstep(clamp01(u * 6));
+    else t = smoothstep(clamp01(u * 2.4));
+
+    staffAng = ANG[prev] + (ANG[state] - ANG[prev]) * t;
+    armRaise = ARM[prev] + (ARM[state] - ARM[prev]) * t;
+    headTiltF = TILT[prev] + (TILT[state] - TILT[prev]) * t;
+    glowF = GLOW[prev] + (GLOW[state] - GLOW[prev]) * t;
+
+    var idleAmt = state === ST_IDLE ? 1 : state === ST_RECOVER ? 0.45 : 0.08;
+    bobF = (Math.sin(tick * 0.105) + 1) * 0.5 * idleAmt;
+    robeSwayF = Math.sin(tick * 0.078) * idleAmt;
+    beardSwayF = Math.sin(tick * 0.091 + 0.6) * idleAmt;
+
+    if (state === ST_CHARGE) {
+      glowF += ((tick & 4) ? 0.18 : 0) * (0.4 + 0.6 * u);
+      if (glowF > 1) glowF = 1;
+    }
+
+    var bob = bobF < 0.5 ? 0 : 1;
+    ftX = 40;
+    ftY = 86;
+    shX = ftX + 2;
+    shY = ftY - 21 - bob - ((armRaise * 2 + 0.4) | 0);
+
+    var ang = staffAng;
+    var alen = 6 + ((armRaise * 2) | 0);
+    handX = shX + Math.round(Math.cos(ang) * alen);
+    handY = shY + Math.round(Math.sin(ang) * alen);
+    gemX = shX + Math.round(Math.cos(ang) * 22);
+    gemY = shY + Math.round(Math.sin(ang) * 22);
+  }
+
+  function onCast() {
+    shakeT = 14;
+    var i, a, sp;
+    for (i = 0; i < 12; i++) {
+      a = i * 0.523598775598;
+      sp = 1.1 + rnd() * 1.4;
+      pOn[i] = 1;
+      pX[i] = gemX;
+      pY[i] = gemY;
+      pVX[i] = Math.cos(a) * sp;
+      pVY[i] = Math.sin(a) * sp * 0.85;
+      pLife[i] = 18 + ((rnd() * 10) | 0);
+      pMax[i] = pLife[i];
+      pGrav[i] = 0.03;
+      pKind[i] = 2;
+    }
+    for (i = 0; i < 20; i++) {
+      a = rnd() * 6.28318530718;
+      sp = 0.6 + rnd() * 2.2;
+      spawn(gemX, gemY, Math.cos(a) * sp, Math.sin(a) * sp * 0.9, 16 + ((rnd() * 14) | 0), 0.025, 2);
+    }
+    boltOn = 1;
+    boltX = gemX;
+    boltY = gemY;
+    boltVX = 2.15;
+    boltVY = -0.12;
+    boltLife = 56;
+  }
+
+  function updateParticles() {
+    var i, u, ang, rr, n = MAX;
+    if (state === ST_CHARGE) {
+      u = st / DUR[ST_CHARGE];
+      for (i = 0; i < 12; i++) {
+        ang = tick * 0.13 + i * 0.523598775598;
+        rr = 11.5 - 8.6 * u;
+        pOn[i] = 1;
+        pX[i] = gemX + Math.cos(ang) * rr;
+        pY[i] = gemY + Math.sin(ang) * rr * 0.72;
+        pVX[i] = 0;
+        pVY[i] = 0;
+        pLife[i] = 10;
+        pMax[i] = 10;
+        pGrav[i] = 0;
+        pKind[i] = 1;
+      }
+    }
+    for (i = 0; i < n; i++) {
+      if (!pOn[i]) continue;
+      if (state === ST_CHARGE && i < 12) continue;
+      pLife[i]--;
+      if (pLife[i] <= 0) {
+        pOn[i] = 0;
+        continue;
+      }
+      pX[i] += pVX[i];
+      pY[i] += pVY[i];
+      pVX[i] *= 0.968;
+      pVY[i] += pGrav[i];
+    }
+  }
+
+  function updateBolt() {
+    if (!boltOn) return;
+    boltLife--;
+    boltX += boltVX;
+    boltY += boltVY;
+    spawn(boltX, boltY, -0.55 - rnd() * 0.35, (rnd() - 0.5) * 0.85, 12 + ((rnd() * 8) | 0), 0.012, 3);
+    if ((tick & 1) === 0) {
+      spawn(boltX - 1, boltY + (rnd() < 0.5 ? -1 : 1), -0.2, (rnd() - 0.5) * 0.4, 8, 0, 3);
+    }
+    if (boltX > 132 || boltLife <= 0) boltOn = 0;
+  }
+
+  function update() {
+    tick++;
+    st++;
+    if (st >= DUR[state]) {
+      state = (state + 1) & 3;
+      st = 0;
+      if (state === ST_CAST) onCast();
+    }
+    evalPose();
+    if (shakeT > 0) {
+      shakeT--;
+      var amp = shakeT > 8 ? 2 : 1;
+      shakeX = (tick & 2) ? amp : -amp;
+      shakeY = (tick & 1) ? 1 : 0;
+    } else {
+      shakeX = 0;
+      shakeY = 0;
+    }
+    updateParticles();
+    updateBolt();
+  }
+
+  function drawMoon(mx, my) {
+    rect(mx + 3, my, 5, 1, C_MOON);
+    rect(mx + 2, my + 1, 7, 1, C_MOON);
+    rect(mx + 1, my + 2, 9, 2, C_MOON);
+    rect(mx, my + 4, 11, 3, C_MOON);
+    rect(mx + 1, my + 7, 9, 2, C_MOON);
+    rect(mx + 2, my + 9, 7, 1, C_MOON);
+    rect(mx + 3, my + 10, 5, 1, C_MOON);
+    rect(mx + 1, my + 3, 2, 5, C_MOONS);
+    pset(mx + 2, my + 2, C_MOONS);
+    pset(mx + 1, my + 8, C_MOONS);
+    pset(mx + 6, my + 2, C_WHITE);
+    pset(mx + 7, my + 3, C_WHITE);
+    pset(mx + 5, my + 5, C_MOONS);
+    pset(mx + 8, my + 6, C_MOONS);
+    pset(mx + 4, my + 7, C_MOONS);
+  }
+
+  function drawStars() {
+    var i, ph, ci;
+    for (i = 0; i < STAR_N; i++) {
+      ph = (tick + STAR_P[i] * 3) % 96;
+      if (ph >= 78) continue;
+      if (ph < 6) ci = C_MW;
+      else if (ph < 28) ci = C_WHITE;
+      else if (ph < 55) ci = C_MOON;
+      else ci = C_SKYH;
+      pset(STAR_X[i], STAR_Y[i], ci);
+    }
+  }
+
+  function drawFloor() {
+    rect(0, 87, 128, 1, C_FLR);
+    rect(0, 88, 128, 8, C_FLRD);
+    var i, x;
+    for (i = 0; i < 12; i++) {
+      x = i * 11 + 2;
+      rect(x, 87, 4, 1, C_MOONS);
+      pset(x + 1, 89, C_FLR);
+      if ((i & 1) === 0) pset(x + 5, 91, C_FLR);
+    }
+    rect(ftX - 9, 86, 18, 1, C_VOID);
+    rect(ftX - 6, 85, 13, 1, C_OUT);
+  }
+
+  function drawGem(gx, gy, glow) {
+    var core = glow > 0.55 ? C_MW : C_GOLD;
+    var ring = glow > 0.7 ? C_CYAN : (glow > 0.35 ? C_GOLD : C_PURP);
+    pset(gx, gy, core);
+    pset(gx - 1, gy, ring);
+    pset(gx + 1, gy, ring);
+    pset(gx, gy - 1, ring);
+    pset(gx, gy + 1, ring);
+    if (glow > 0.4) {
+      pset(gx - 1, gy - 1, C_PURP);
+      pset(gx + 1, gy - 1, C_PURP);
+      pset(gx - 1, gy + 1, C_PURP);
+      pset(gx + 1, gy + 1, C_PURP);
+    }
+    if (glow > 0.75) {
+      pset(gx, gy - 2, C_CYAN);
+      pset(gx, gy + 2, C_CYAN);
+      pset(gx - 2, gy, C_CYAN);
+      pset(gx + 2, gy, C_CYAN);
+    }
+    if (state === ST_CHARGE && (tick & 3) === 0) {
+      pset(gx, gy, C_WHITE);
+    }
+  }
+
+  function drawWizard() {
+    var bob = bobF < 0.5 ? 0 : 1;
+    var ht = headTiltF < -0.28 ? -1 : headTiltF > 0.28 ? 1 : 0;
+    var rs = robeSwayF < -0.35 ? -1 : robeSwayF > 0.35 ? 1 : 0;
+    var bs = beardSwayF < -0.35 ? -1 : beardSwayF > 0.35 ? 1 : 0;
+    var fy = ftY - bob;
+    var fx = ftX;
+    var glow = glowF;
+    var rim = glow > 0.62 ? C_CYAN : glow > 0.32 ? C_GOLD : C_ROBEL;
+    var hx = fx - 4 + ht;
+    var hy = fy - 34;
+
+    /* robe outline then fill */
+    rect(fx - 8 + rs, fy - 2, 17, 2, C_OUT);
+    rect(fx - 7 + rs, fy - 5, 15, 3, C_OUT);
+    rect(fx - 6, fy - 10, 13, 5, C_OUT);
+    rect(fx - 5, fy - 15, 11, 5, C_OUT);
+    rect(fx - 4, fy - 19, 9, 4, C_OUT);
+
+    rect(fx - 7 + rs, fy - 2, 15, 2, C_ROBE);
+    rect(fx - 6 + rs, fy - 5, 13, 3, C_ROBE);
+    rect(fx - 5, fy - 10, 11, 5, C_ROBE);
+    rect(fx - 4, fy - 15, 9, 5, C_ROBE);
+    rect(fx - 3, fy - 19, 7, 4, C_ROBE);
+
+    rect(fx - 6 + rs, fy - 4, 4, 2, C_ROBEL);
+    rect(fx - 5, fy - 9, 3, 4, C_ROBEL);
+    rect(fx - 4, fy - 14, 3, 3, C_ROBEL);
+    rect(fx - 3, fy - 18, 2, 3, C_ROBEL);
+
+    /* belt */
+    rect(fx - 4, fy - 16, 9, 1, C_OUT);
+    rect(fx - 1, fy - 16, 3, 1, C_GOLD);
+
+    /* feet */
+    rect(fx - 6, fy - 1, 4, 2, C_HAT);
+    rect(fx + 2, fy - 1, 4, 2, C_HAT);
+    pset(fx - 5, fy, C_HATH);
+    pset(fx + 4, fy, C_HATH);
+
+    /* head */
+    rect(hx + 2, hy + 14, 8, 6, C_OUT);
+    rect(hx + 3, hy + 15, 6, 5, C_SKIN);
+    rect(hx + 3, hy + 15, 2, 2, C_SKINS);
+    pset(hx + 4, hy + 17, C_OUT);
+    pset(hx + 7, hy + 17, C_OUT);
+
+    /* beard */
+    rect(hx + 2 + bs, hy + 19, 8, 3, C_OUT);
+    rect(hx + 3 + bs, hy + 22, 6, 4, C_OUT);
+    rect(hx + 4 + bs, hy + 26, 4, 3, C_OUT);
+    rect(hx + 3 + bs, hy + 19, 6, 3, C_BEARD);
+    rect(hx + 4 + bs, hy + 22, 4, 4, C_BEARD);
+    rect(hx + 5 + bs, hy + 26, 2, 2, C_BEARD);
+    rect(hx + 3 + bs, hy + 20, 2, 2, C_BEARDS);
+    pset(hx + 5 + bs, hy + 27, C_BEARDS);
+
+    /* hat: tall point, left bend, wide brim */
+    var ht0 = hx + ht;
+    pset(ht0 + 1, hy + 0, C_OUT);
+    pset(ht0 + 2, hy + 0, C_HAT);
+    rect(ht0 + 0, hy + 1, 3, 1, C_OUT);
+    pset(ht0 + 1, hy + 1, C_HAT);
+    pset(ht0 + 2, hy + 1, C_HATH);
+    rect(ht0 + 0, hy + 2, 4, 1, C_OUT);
+    rect(ht0 + 1, hy + 2, 2, 1, C_HAT);
+    rect(ht0 + 1, hy + 3, 4, 1, C_OUT);
+    pset(ht0 + 2, hy + 3, C_HAT);
+    pset(ht0 + 3, hy + 3, C_HATH);
+    rect(ht0 + 2, hy + 4, 4, 1, C_OUT);
+    rect(ht0 + 3, hy + 4, 2, 1, C_HAT);
+    rect(ht0 + 3, hy + 5, 5, 1, C_OUT);
+    rect(ht0 + 4, hy + 5, 3, 1, C_HAT);
+    pset(ht0 + 5, hy + 5, C_HATH);
+    rect(ht0 + 3, hy + 6, 6, 1, C_OUT);
+    rect(ht0 + 4, hy + 6, 4, 1, C_HAT);
+    rect(ht0 + 4, hy + 7, 7, 1, C_OUT);
+    rect(ht0 + 5, hy + 7, 5, 1, C_HAT);
+    pset(ht0 + 6, hy + 7, C_HATH);
+    rect(ht0 + 3, hy + 8, 8, 1, C_OUT);
+    rect(ht0 + 4, hy + 8, 6, 1, C_HAT);
+    rect(ht0 + 2, hy + 9, 10, 1, C_OUT);
+    rect(ht0 + 3, hy + 9, 8, 1, C_HAT);
+    rect(ht0 + 1, hy + 10, 12, 1, C_OUT);
+    rect(ht0 + 2, hy + 10, 10, 1, C_HAT);
+    rect(ht0 + 0, hy + 11, 14, 2, C_OUT);
+    rect(ht0 + 1, hy + 12, 12, 1, C_HAT);
+    rect(ht0 + 2, hy + 13, 10, 1, C_HAT);
+    pset(ht0 + 3, hy + 12, C_HATH);
+    pset(ht0 + 4, hy + 13, C_HATH);
+
+    /* 1px rim from the gem (right side) */
+    pset(ht0 + 13, hy + 11, rim);
+    pset(ht0 + 10, hy + 8, rim);
+    pset(ht0 + 8, hy + 5, rim);
+    pset(fx + 4, fy - 12, rim);
+    pset(fx + 5, fy - 8, rim);
+    pset(fx + 6 + rs, fy - 4, rim);
+    pset(hx + 9 + bs, hy + 21, rim);
+    if (glow > 0.5) {
+      pset(ht0 + 11, hy + 9, rim);
+      pset(fx + 5, fy - 18, rim);
+      pset(fx + 7 + rs, fy - 3, rim);
+    }
+    if (glow > 0.8) {
+      pset(ht0 + 7, hy + 3, C_CYAN);
+      pset(fx + 6, fy - 11, C_CYAN);
+    }
+
+    /* back sleeve + arm along staff */
+    line(shX, shY, handX, handY, C_OUT);
+    line(shX, shY + 1, handX, handY + 1, C_ROBE);
+    pset(handX, handY, C_SKIN);
+    pset(handX + 1, handY, C_SKINS);
+    pset(shX - 1, shY, C_ROBEL);
+
+    /* staff */
+    line(handX, handY, gemX, gemY, C_STAFF);
+    pset(handX, handY + 1, C_STAFFH);
+    pset((handX + gemX) >> 1, ((handY + gemY) >> 1) + 1, C_STAFFH);
+
+    drawGem(gemX, gemY, glow);
+  }
+
+  function drawBurst() {
+    if (state !== ST_CAST || st > 12) return;
+    var r = 2 + (st >> 1);
+    var i, ci;
+    ci = st < 3 ? C_MW : st < 7 ? C_GOLD : C_CYAN;
+    for (i = 0; i < 8; i++) {
+      pset(gemX + RING_DX[i] * r, gemY + RING_DY[i] * r, ci);
+      if (st < 5) pset(gemX + RING_DX[i] * (r - 1), gemY + RING_DY[i] * (r - 1), C_MW);
+    }
+    if (st < 4) {
+      rect(gemX - 1, gemY - 1, 3, 3, C_MW);
+    }
+  }
+
+  function drawBolt() {
+    if (!boltOn) return;
+    var bx = Math.round(boltX);
+    var by = Math.round(boltY);
+    pset(bx, by, C_MW);
+    pset(bx - 1, by, C_CYAN);
+    pset(bx + 1, by, C_GOLD);
+    pset(bx, by - 1, C_CYAN);
+    pset(bx, by + 1, C_PURP);
+    pset(bx - 2, by, C_PURP);
+    pset(bx + 2, by, C_MW);
+    pset(bx - 3, by, C_GOLD);
+  }
+
+  function drawParticles() {
+    var i, lf, ci, px, py, n = MAX;
+    for (i = 0; i < n; i++) {
+      if (!pOn[i]) continue;
+      lf = pMax[i] > 0 ? pLife[i] / pMax[i] : 0;
+      if (lf > 0.78) ci = C_MW;
+      else if (lf > 0.52) ci = C_GOLD;
+      else if (lf > 0.26) ci = C_CYAN;
+      else ci = C_PURP;
+      px = Math.round(pX[i]);
+      py = Math.round(pY[i]);
+      pset(px, py, ci);
+      if (pKind[i] === 1 || lf > 0.7) {
+        pset(px - 1, py, ci);
+        pset(px + 1, py, ci);
+        pset(px, py - 1, ci);
+      }
+      if (lf > 0.82) pset(px, py - 1, C_WHITE);
+    }
+  }
+
+  function drawSky() {
+    rect(0, 0, W, 84, C_VOID);
+    rect(0, 84, W, 3, C_SKY);
+    pset(18, 83, C_SKYM);
+    pset(44, 82, C_SKYM);
+    pset(71, 83, C_SKYM);
+    pset(99, 82, C_SKY);
+  }
+
+  function render() {
+    _c = -1;
+    ctx.imageSmoothingEnabled = false;
+    drawSky();
+    ctx.save();
+    ctx.translate(shakeX, shakeY);
+    drawStars();
+    drawMoon(102, 8);
+    drawFloor();
+    drawWizard();
+    drawBurst();
+    drawParticles();
+    drawBolt();
+    ctx.restore();
+
+    dctx.imageSmoothingEnabled = false;
+    dctx.drawImage(off, 0, 0, W, H, 0, 0, W * scale, H * scale);
+  }
+
+  function layout() {
+    var iw = window.innerWidth | 0;
+    var ih = window.innerHeight | 0;
+    scale = Math.max(1, Math.min((iw / W) | 0, (ih / H) | 0));
+    var dw = W * scale;
+    var dh = H * scale;
+    disp.width = dw;
+    disp.height = dh;
+    disp.style.width = dw + 'px';
+    disp.style.height = dh + 'px';
+    disp.style.left = (((iw - dw) / 2) | 0) + 'px';
+    disp.style.top = (((ih - dh) / 2) | 0) + 'px';
+    dctx.imageSmoothingEnabled = false;
+  }
+
+  function frame(now) {
+    if (!last) last = now;
+    acc += now - last;
+    last = now;
+    if (acc > 200) acc = 200;
+    while (acc >= 16.6666666667) {
+      update();
+      acc -= 16.6666666667;
+    }
+    render();
+    requestAnimationFrame(frame);
+  }
+
+  window.addEventListener('resize', layout);
+  layout();
+  evalPose();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

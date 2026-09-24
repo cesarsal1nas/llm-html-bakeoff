@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pixel Wizard Bakeoff</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  background: #0f1118;
+  color: #e8eaf0;
+  padding: 20px 24px 48px;
+  line-height: 1.35;
+}
+h1 { text-align: center; margin-bottom: 6px; font-size: 1.65rem; letter-spacing: .02em; }
+.sub { text-align: center; opacity: .65; font-size: .85rem; margin-bottom: 8px; }
+.credit {
+  text-align: center;
+  font-size: .82rem;
+  color: #a5b4c8;
+  margin-bottom: 22px;
+}
+.credit a { color: #7dd3fc; text-decoration: none; }
+.credit a:hover { text-decoration: underline; }
+h2.ver {
+  max-width: 1400px;
+  margin: 28px auto 10px;
+  font-size: .95rem;
+  color: #c5cad6;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+  border-bottom: 1px solid #2a3144;
+  padding-bottom: 6px;
+}
+.legend {
+  max-width: 1400px;
+  margin: 0 auto 8px;
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 12px;
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: #9aa3b5;
+  text-align: center;
+}
+.legend span { padding: 4px 0; border-radius: 6px; }
+.legend .l-gb { color: #ff8a8a; }
+.legend .l-cu { color: #93c5fd; }
+.legend .l-hm { color: #5eead4; }
+table.stats {
+  width: 100%;
+  max-width: 1400px;
+  margin: 0 auto 10px;
+  border-collapse: collapse;
+  font-size: .76rem;
+  background: #161a24;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid #2a3144;
+}
+table.stats th, table.stats td {
+  padding: 7px 8px;
+  text-align: left;
+  border-bottom: 1px solid #252b3a;
+  white-space: nowrap;
+}
+table.stats th {
+  background: #1c2230;
+  color: #9aa3b5;
+  font-weight: 600;
+}
+table.stats tr:last-child td { border-bottom: none; }
+table.stats td.num { font-variant-numeric: tabular-nums; text-align: right; }
+table.stats tr.dnf td { background: #1a1214; color: #fca5a5; }
+table.stats tr.pending td { background: #12151c; color: #6b7280; font-style: italic; }
+.tag {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: .68rem;
+  font-weight: 600;
+}
+.tag-gb { background: #3a1a1a; color: #ff8a8a; }
+.tag-cu { background: #1a243a; color: #93c5fd; }
+.tag-hm { background: #12332f; color: #5eead4; }
+.tag-dnf { background: #3f1219; color: #fda4af; }
+.tag-pend { background: #1f2430; color: #9ca3af; }
+.failbox {
+  max-width: 1400px;
+  margin: 10px auto 16px;
+  padding: 12px 14px;
+  background: #1a1216;
+  border: 1px solid #5c2430;
+  border-radius: 10px;
+  font-size: .8rem;
+  color: #e7b1b8;
+}
+.failbox strong { color: #fff; }
+.failbox code { font-size: .78em; color: #fecdd3; }
+.triple {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 14px;
+  max-width: 1400px;
+  margin: 0 auto 8px;
+}
+.pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  max-width: 1400px;
+  margin: 0 auto 8px;
+}
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  max-width: 1400px;
+  margin: 0 auto 8px;
+}
+@media (max-width: 1100px) {
+  .triple { grid-template-columns: 1fr; }
+  .legend { display: none; }
+}
+@media (max-width: 800px) {
+  .pair, .grid-2 { grid-template-columns: 1fr; }
+}
+.cell {
+  background: #161a24;
+  border: 1px solid #2a3144;
+  border-radius: 12px;
+  padding: 10px;
+  min-width: 0;
+}
+.cell.dnf-cell {
+  border-color: #5c2430;
+  background: #1a1216;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  min-height: 220px;
+}
+.dnf-cell .dnf-body {
+  text-align: center;
+  max-width: 28ch;
+  margin: 0 auto;
+}
+.cell.pend-cell {
+  border-style: dashed;
+  border-color: #333a4d;
+  background: #12151c;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 220px;
+}
+.cell h3 {
+  font-size: .82rem;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: .4em;
+  flex-wrap: wrap;
+}
+.dot {
+  width: .5em; height: .5em; border-radius: 50%;
+  background: currentColor; flex-shrink: 0;
+}
+.c-gb { color: #ff8a8a; }
+.c-cu { color: #93c5fd; }
+.c-hm { color: #5eead4; }
+.c-dnf { color: #fda4af; }
+.meta {
+  font-size: .68rem;
+  opacity: .75;
+  margin-bottom: 8px;
+  font-variant-numeric: tabular-nums;
+}
+.frame-wrap {
+  position: relative;
+  padding-top: 75%;
+  overflow: hidden;
+  border-radius: 8px;
+  border: 1px solid #333a4d;
+  background: #000;
+}
+iframe {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  border: none;
+}
+.dnf-body, .pend-body {
+  font-size: .78rem;
+  line-height: 1.45;
+  padding: 6px 2px;
+}
+.dnf-body { color: #e7b1b8; }
+.pend-body { color: #9ca3af; text-align: center; }
+.pend-cell {
+  text-align: center;
+  align-items: center;
+}
+.pend-cell h3 {
+  justify-content: center;
+  width: 100%;
+  text-align: center;
+}
+.pend-cell .meta {
+  text-align: center;
+  width: 100%;
+}
+.dnf-body ul { margin: 8px 0 0 1.1em; }
+.hot { color: #fbbf24; font-weight: 600; }
+.ok { color: #86efac; }
+footer {
+  text-align: center;
+  margin-top: 32px;
+  opacity: .5;
+  font-size: .75rem;
+}
+code { font-size: .85em; color: #cbd5e1; }
+</style>
+</head>
+<body>
+<h1>Pixel Wizard Bakeoff</h1>
+<p class="sub">Official line per version: <strong>Grok Build</strong> · <strong>Cursor</strong> · <strong>Hermes</strong></p>
+<!-- ==================== 4.5 ==================== -->
+<h2 class="ver">Version 4.5</h2>
+<div class="legend">
+  <span class="l-gb">Grok Build</span>
+  <span class="l-cu">Cursor</span>
+  <span class="l-hm">Hermes</span>
+</div>
+<table class="stats">
+<thead>
+<tr>
+  <th>Source</th>
+  <th>Run</th>
+  <th>Model</th>
+  <th>Size</th>
+  <th>Wall</th>
+  <th>Input</th>
+  <th>Output</th>
+  <th>Reason</th>
+  <th>Cache</th>
+  <th>In+Out</th>
+  <th>Calls</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><span class="tag tag-gb">Grok Build</span></td>
+  <td>grok45build</td>
+  <td>grok-4.5-build</td>
+  <td class="num">20.0 KB</td>
+  <td class="num">8.1 min</td>
+  <td class="num">1,606,072</td>
+  <td class="num">31,891</td>
+  <td class="num">5,328</td>
+  <td class="num">1,419,392</td>
+  <td class="num">1,637,963</td>
+  <td class="num">31</td>
+</tr>
+<tr>
+  <td><span class="tag tag-cu">Cursor</span></td>
+  <td>grok45cursor</td>
+  <td>cursor-grok-4.5-high</td>
+  <td class="num">19.5 KB</td>
+  <td class="num">17.3 min</td>
+  <td class="num">—</td>
+  <td class="num">—</td>
+  <td class="num">—</td>
+  <td class="num">—</td>
+  <td class="num">n/a</td>
+  <td class="num">n/a</td>
+</tr>
+<tr>
+  <td><span class="tag tag-hm">Hermes</span></td>
+  <td>grok45hermes</td>
+  <td>grok-4.5</td>
+  <td class="num">24.2 KB</td>
+  <td class="num">3.8 min</td>
+  <td class="num">68,289</td>
+  <td class="num">9,993</td>
+  <td class="num">528</td>
+  <td class="num">193,280</td>
+  <td class="num ok">78,282</td>
+  <td class="num">3</td>
+</tr>
+</tbody>
+</table>
+<div class="triple">
+  <div class="cell c-gb">
+    <h3><span class="dot"></span><span class="tag tag-gb">Grok Build</span> grok45build</h3>
+    <div class="meta">20.0 KB · 8.1 min · in+out 1.64M · 31 calls</div>
+    <div class="frame-wrap"><iframe src="runs/grok45build.html" loading="lazy"></iframe></div>
+  </div>
+  <div class="cell c-cu">
+    <h3><span class="dot"></span><span class="tag tag-cu">Cursor</span> grok45cursor</h3>
+    <div class="meta">19.5 KB · 17.3 min · tokens n/a · 4.5-high</div>
+    <div class="frame-wrap"><iframe src="runs/grok45cursor.html" loading="lazy"></iframe></div>
+  </div>
+  <div class="cell c-hm">
+    <h3><span class="dot"></span><span class="tag tag-hm">Hermes</span> grok45hermes</h3>
+    <div class="meta">24.2 KB · 3.8 min · in+out 78k · 3 tools</div>
+    <div class="frame-wrap"><iframe src="runs/grok45hermes.html" loading="lazy"></iframe></div>
+  </div>
+</div>
+
+<!-- ==================== 4.6 ==================== -->
+<h2 class="ver">Version 4.6</h2>
+<div class="legend">
+  <span class="l-gb">Grok Build</span>
+  <span class="l-cu">Cursor</span>
+  <span class="l-hm">Hermes</span>
+</div>
+<table class="stats">
+<thead>
+<tr>
+  <th>Source</th>
+  <th>Run</th>
+  <th>Model</th>
+  <th>Size</th>
+  <th>Wall</th>
+  <th>Input</th>
+  <th>Output</th>
+  <th>Reason</th>
+  <th>Cache</th>
+  <th>In+Out</th>
+  <th>Calls</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><span class="tag tag-gb">Grok Build</span></td>
+  <td>grok46build</td>
+  <td>grok-4.6-build</td>
+  <td class="num">17.1 KB</td>
+  <td class="num">18.5 min</td>
+  <td class="num">1,345,405</td>
+  <td class="num">64,430</td>
+  <td class="num">51,022</td>
+  <td class="num">1,145,856</td>
+  <td class="num">1,409,835</td>
+  <td class="num">18</td>
+</tr>
+<tr>
+  <td><span class="tag tag-cu">Cursor</span></td>
+  <td>grok46cursor</td>
+  <td>cursor-grok-4.6-xhigh</td>
+  <td class="num">21.8 KB</td>
+  <td class="num">39.9 min</td>
+  <td class="num">—</td>
+  <td class="num">—</td>
+  <td class="num">—</td>
+  <td class="num">—</td>
+  <td class="num">n/a</td>
+  <td class="num">n/a</td>
+</tr>
+<tr>
+  <td><span class="tag tag-hm">Hermes</span></td>
+  <td>grok46hermes</td>
+  <td>grok-4.6</td>
+  <td class="num">17.0 KB</td>
+  <td class="num">10.3 min</td>
+  <td class="num">113,193</td>
+  <td class="num">35,214</td>
+  <td class="num">22,453</td>
+  <td class="num">1,271,680</td>
+  <td class="num">148,407</td>
+  <td class="num">24</td>
+</tr>
+</tbody>
+</table>
+<div class="triple">
+  <div class="cell c-gb">
+    <h3><span class="dot"></span><span class="tag tag-gb">Grok Build</span> grok46build</h3>
+    <div class="meta">17.1 KB · 18.5 min · in+out 1.41M · 18 calls</div>
+    <div class="frame-wrap"><iframe src="runs/grok46build.html" loading="lazy"></iframe></div>
+  </div>
+  <div class="cell c-cu">
+    <h3><span class="dot"></span><span class="tag tag-cu">Cursor</span> grok46cursor</h3>
+    <div class="meta">21.8 KB · 39.9 min · tokens n/a · 4.6-xhigh</div>
+    <div class="frame-wrap"><iframe src="runs/grok46cursor.html" loading="lazy"></iframe></div>
+  </div>
+  <div class="cell c-hm">
+    <h3><span class="dot"></span><span class="tag tag-hm">Hermes</span> grok46hermes</h3>
+    <div class="meta">17.0 KB · 10.3 min · in+out 148k · 24 tools</div>
+    <div class="frame-wrap"><iframe src="runs/grok46hermes.html" loading="lazy"></iframe></div>
+  </div>
+</div>
+
+<!-- ==================== 4.7 ==================== -->
+<h2 class="ver">Version 4.7</h2>
+<div class="legend">
+  <span class="l-gb">Grok Build</span>
+  <span class="l-cu">Cursor</span>
+  <span class="l-hm">Hermes</span>
+</div>
+<table class="stats">
+<thead>
+<tr>
+  <th>Source</th>
+  <th>Run</th>
+  <th>Model</th>
+  <th>Size</th>
+  <th>Wall</th>
+  <th>Input</th>
+  <th>Output</th>
+  <th>Reason</th>
+  <th>Cache</th>
+  <th>In+Out</th>
+  <th>Calls</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><span class="tag tag-gb">Grok Build</span></td>
+  <td>grok47build</td>
+  <td>grok-4.7-build</td>
+  <td class="num">25.3 KB</td>
+  <td class="num hot">52.0 min</td>
+  <td class="num">4,358,524</td>
+  <td class="num">164,774</td>
+  <td class="num">132,037</td>
+  <td class="num">3,808,256</td>
+  <td class="num hot">4,523,298</td>
+  <td class="num">32</td>
+</tr>
+<tr>
+  <td><span class="tag tag-cu">Cursor</span></td>
+  <td>grok47cursor</td>
+  <td>grok-4.7-xhigh</td>
+  <td class="num">20.2 KB</td>
+  <td class="num hot">95.6 min</td>
+  <td class="num">—</td>
+  <td class="num">—</td>
+  <td class="num">—</td>
+  <td class="num">—</td>
+  <td class="num">n/a</td>
+  <td class="num">n/a</td>
+</tr>
+<tr class="dnf">
+  <td><span class="tag tag-dnf">Hermes DNF</span></td>
+  <td>grok47hermes</td>
+  <td>grok-4.7</td>
+  <td class="num">no HTML</td>
+  <td class="num">17.2 min</td>
+  <td class="num">—</td>
+  <td class="num">—</td>
+  <td class="num">—</td>
+  <td class="num">—</td>
+  <td class="num">0</td>
+  <td class="num">0</td>
+</tr>
+</tbody>
+</table>
+<div class="triple">
+  <div class="cell c-gb">
+    <h3><span class="dot"></span><span class="tag tag-gb">Grok Build</span> grok47build</h3>
+    <div class="meta hot">25.3 KB · 52 min · in+out 4.52M · 32 calls</div>
+    <div class="frame-wrap"><iframe src="runs/grok47build.html" loading="lazy"></iframe></div>
+  </div>
+  <div class="cell c-cu">
+    <h3><span class="dot"></span><span class="tag tag-cu">Cursor</span> grok47cursor</h3>
+    <div class="meta hot">20.2 KB · 95.6 min · tokens n/a · killed (reconnect hang)</div>
+    <div class="meta" style="opacity:.85;font-size:.72rem;line-height:1.35;margin-top:2px;">
+      17:28 → 19:04 · HTML frozen 18:06 · EXIT 143 SIGTERM · draft shipped after kill
+    </div>
+    <div class="frame-wrap"><iframe src="runs/grok47cursor.html" loading="lazy"></iframe></div>
+  </div>
+  <div class="cell dnf-cell c-dnf">
+    <div class="pend-body" style="width:100%; color:#e7b1b8;">
+      <div style="margin-bottom:10px;"><span class="tag tag-dnf">Hermes DNF</span></div>
+      <div style="margin-bottom:8px; font-size:.82rem; color:#fda4af;">grok47hermes</div>
+      No artifact. Provider hang (300s × 3)<br>
+      and/or offer-loop without shipping HTML.
+    </div>
+  </div>
+</div>
+<div class="failbox">
+  <strong>Cursor grok47cursor:</strong>
+  killed after ~95.6 min (17:28–19:04). Agent lost connection to api5.cursor.sh (reconnect ×3),
+  HTML draft stopped updating at 18:06 (20.2 KB full-ish wizard still usable). EXIT 143 SIGTERM.
+  Tokens n/a on Cursor <code>-p</code>.
+  <br><br>
+  <strong>Hermes grok-4.7:</strong>
+  no HTML artifact — provider timeouts (300s × 3) and/or a loop that never shipped a file.
+</div>
+
+<!-- ==================== Composer 2.5 (no Build channel) ==================== -->
+<h2 class="ver">Composer 2.5 · Cursor · Hermes <span style="opacity:.5;font-weight:400;text-transform:none">(no Grok Build id)</span></h2>
+<table class="stats">
+<thead>
+<tr>
+  <th>Source</th>
+  <th>Run</th>
+  <th>Model</th>
+  <th>Size</th>
+  <th>Wall</th>
+  <th>In+Out</th>
+  <th>Calls</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><span class="tag tag-cu">Cursor</span></td>
+  <td>composer25cursor</td>
+  <td>composer-2.5-fast</td>
+  <td class="num">13.8 KB</td>
+  <td class="num">8.4 min</td>
+  <td class="num">n/a</td>
+  <td class="num">n/a</td>
+</tr>
+<tr>
+  <td><span class="tag tag-hm">Hermes</span></td>
+  <td>composer25hermes</td>
+  <td>grok-composer-2.5-fast</td>
+  <td class="num">20.9 KB</td>
+  <td class="num">10.9 min</td>
+  <td class="num ok">74,525</td>
+  <td class="num">1</td>
+</tr>
+</tbody>
+</table>
+<div class="legend">
+  <span class="l-gb">Grok Build</span>
+  <span class="l-cu">Cursor</span>
+  <span class="l-hm">Hermes</span>
+</div>
+<div class="triple">
+  <div class="cell pend-cell" style="opacity:.55; text-align:center; align-items:center;">
+    <div class="pend-body" style="width:100%;">
+      <div style="margin-bottom:10px;"><span class="tag tag-gb">Grok Build</span></div>
+      no Build channel<br>for Composer 2.5
+    </div>
+  </div>
+  <div class="cell c-cu">
+    <h3><span class="dot"></span><span class="tag tag-cu">Cursor</span> composer25cursor</h3>
+    <div class="meta">13.8 KB · 8.4 min · tokens n/a</div>
+    <div class="frame-wrap"><iframe src="runs/composer25cursor.html" loading="lazy"></iframe></div>
+  </div>
+  <div class="cell c-hm">
+    <h3><span class="dot"></span><span class="tag tag-hm">Hermes</span> composer25hermes</h3>
+    <div class="meta">20.9 KB · 10.9 min · in+out 75k · 1 tool</div>
+    <div class="frame-wrap"><iframe src="runs/composer25hermes.html" loading="lazy"></iframe></div>
+  </div>
+</div>
+
+<!-- ==================== Hermes-only extras ==================== -->
+<h2 class="ver">Hermes only · older / other</h2>
+<table class="stats">
+<thead>
+<tr>
+  <th>Run</th>
+  <th>Model</th>
+  <th>Size</th>
+  <th>Wall</th>
+  <th>In+Out</th>
+  <th>Calls</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td>grokbuild01hermes</td>
+  <td>grok-build-0.1</td>
+  <td class="num">16.3 KB</td>
+  <td class="num">9.1 min</td>
+  <td class="num">174,020</td>
+  <td class="num">11</td>
+</tr>
+<tr>
+  <td>grok420hermes</td>
+  <td>grok-4.20-0309-reasoning</td>
+  <td class="num">16.7 KB</td>
+  <td class="num">2.3 min</td>
+  <td class="num ok">65,818</td>
+  <td class="num">3</td>
+</tr>
+<tr>
+  <td>grok43hermes</td>
+  <td>grok-4.3</td>
+  <td class="num">14.2 KB</td>
+  <td class="num">1.9 min</td>
+  <td class="num ok">69,442</td>
+  <td class="num">1</td>
+</tr>
+</tbody>
+</table>
+<div class="legend">
+  <span class="l-hm">Hermes · build-0.1</span>
+  <span class="l-hm">Hermes · 4.20</span>
+  <span class="l-hm">Hermes · 4.3</span>
+</div>
+<div class="triple">
+  <div class="cell c-hm">
+    <h3><span class="dot"></span><span class="tag tag-hm">Hermes</span> grokbuild01hermes</h3>
+    <div class="meta">16.3 KB · 9.1 min · in+out 174k · grok-build-0.1</div>
+    <div class="frame-wrap"><iframe src="runs/grokbuild01hermes.html" loading="lazy"></iframe></div>
+  </div>
+  <div class="cell c-hm">
+    <h3><span class="dot"></span><span class="tag tag-hm">Hermes</span> grok420hermes</h3>
+    <div class="meta">16.7 KB · 2.3 min · in+out 66k · grok-4.20</div>
+    <div class="frame-wrap"><iframe src="runs/grok420hermes.html" loading="lazy"></iframe></div>
+  </div>
+  <div class="cell c-hm">
+    <h3><span class="dot"></span><span class="tag tag-hm">Hermes</span> grok43hermes</h3>
+    <div class="meta">14.2 KB · 1.9 min · in+out 69k · grok-4.3</div>
+    <div class="frame-wrap"><iframe src="runs/grok43hermes.html" loading="lazy"></iframe></div>
+  </div>
+</div>
+
+
+
+<footer class="credit" style="margin-top:36px; opacity:1;">
+  Prompt by <a href="https://x.com/majidmanzarpour" target="_blank" rel="noopener">@majidmanzarpour</a>
+</footer>
+
+</body>
+</html>

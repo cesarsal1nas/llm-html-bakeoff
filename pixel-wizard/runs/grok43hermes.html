@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>grok43hermes</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #000; height: 100%; }
+  canvas { display: block; image-rendering: pixelated; image-rendering: crisp-edges; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); }
+  #display { image-rendering: pixelated; }
+</style>
+</head>
+<body>
+<canvas id="display"></canvas>
+<script>
+// grok43hermes - Pixel Art Wizard Spellcast
+// Fixed logical resolution 128x96
+const LOGICAL_W = 128;
+const LOGICAL_H = 96;
+
+// Palette (~24 colors)
+const PALETTE = [
+  '#0a0a1f', // 0 deep night
+  '#12123a', // 1 night
+  '#1a1a4a', // 2 deep blue
+  '#2a2a6a', // 3 purple blue
+  '#3a3a8a', // 4 mid purple
+  '#4a4a9a', // 5 bright purple
+  '#5a4a7a', // 6 robe dark
+  '#6a5a8a', // 7 robe mid
+  '#7a6a9a', // 8 robe light
+  '#8a7a6a', // 9 robe warm dark
+  '#9a8a7a', // 10 robe warm
+  '#aa9a8a', // 11 robe highlight
+  '#3a2a1a', // 12 hat dark
+  '#4a3a2a', // 13 hat mid
+  '#5a4a3a', // 14 hat light
+  '#2a1a0a', // 15 beard dark
+  '#3a2a1a', // 16 beard mid
+  '#4a3a2a', // 17 beard light
+  '#ffcc00', // 18 gold
+  '#ffaa00', // 19 magic orange
+  '#ff6600', // 20 magic bright
+  '#ffffff', // 21 white
+  '#aaffff', // 22 cyan spark
+  '#ff88ff', // 23 pink magic
+];
+
+// Preallocate particle pool (allocation-free)
+const MAX_PARTICLES = 64;
+const particles = [];
+for (let i = 0; i < MAX_PARTICLES; i++) {
+  particles.push({
+    x: 0, y: 0,
+    vx: 0, vy: 0,
+    life: 0,
+    maxLife: 0,
+    colorIdx: 0,
+    active: false
+  });
+}
+
+let particleCount = 0;
+
+function spawnParticle(x, y, vx, vy, life, colorIdx) {
+  for (let i = 0; i < MAX_PARTICLES; i++) {
+    const p = particles[i];
+    if (!p.active) {
+      p.x = x;
+      p.y = y;
+      p.vx = vx;
+      p.vy = vy;
+      p.life = life;
+      p.maxLife = life;
+      p.colorIdx = colorIdx;
+      p.active = true;
+      particleCount++;
+      return;
+    }
+  }
+}
+
+function updateParticles() {
+  for (let i = 0; i < MAX_PARTICLES; i++) {
+    const p = particles[i];
+    if (!p.active) continue;
+    p.x += p.vx;
+    p.y += p.vy;
+    p.life--;
+    if (p.life <= 0) {
+      p.active = false;
+      particleCount--;
+    }
+  }
+}
+
+function drawParticles(ctx) {
+  for (let i = 0; i < MAX_PARTICLES; i++) {
+    const p = particles[i];
+    if (!p.active) continue;
+    const t = p.life / p.maxLife;
+    let idx = p.colorIdx;
+    if (t < 0.3) idx = 0; // fade to dark
+    else if (t < 0.6) idx = 20; // bright
+    ctx.fillStyle = PALETTE[idx];
+    const px = Math.floor(p.x);
+    const py = Math.floor(p.y);
+    ctx.fillRect(px, py, 1, 1);
+  }
+}
+
+// Wizard drawing (24x32 logical)
+// x,y is top-left of wizard bounding box
+function drawWizard(ctx, baseX, baseY, params) {
+  const { staffAngle, armRaise, headTilt, robeSway, chargeLevel, castFlash } = params;
+  
+  const x = Math.floor(baseX);
+  const y = Math.floor(baseY);
+  
+  // Floor line
+  ctx.fillStyle = PALETTE[6];
+  ctx.fillRect(0, 88, 128, 8);
+  
+  // Stone floor detail
+  ctx.fillStyle = PALETTE[7];
+  ctx.fillRect(20, 89, 30, 1);
+  ctx.fillRect(70, 90, 40, 1);
+  
+  // Robe (two shades + outline)
+  const robeX = x + 8;
+  const robeY = y + 14;
+  const sway = Math.floor(robeSway);
+  
+  // Outline
+  ctx.fillStyle = PALETTE[6];
+  ctx.fillRect(robeX - 1, robeY, 18, 18);
+  ctx.fillRect(robeX, robeY - 1, 16, 1);
+  
+  // Main robe
+  ctx.fillStyle = PALETTE[9];
+  ctx.fillRect(robeX, robeY, 16, 16);
+  
+  // Robe highlight
+  ctx.fillStyle = PALETTE[10];
+  ctx.fillRect(robeX + 2, robeY + 2, 4, 12);
+  ctx.fillRect(robeX + 10, robeY + 3, 4, 10);
+  
+  // Darker folds
+  ctx.fillStyle = PALETTE[7];
+  ctx.fillRect(robeX + 6 + sway, robeY + 4, 2, 10);
+  ctx.fillRect(robeX + 12 + sway, robeY + 5, 2, 9);
+  
+  // Arms
+  const armY = y + 16 + Math.floor(armRaise * 0.5);
+  ctx.fillStyle = PALETTE[9];
+  // Left arm (holding staff)
+  ctx.fillRect(x + 6, armY, 4, 8);
+  ctx.fillStyle = PALETTE[7];
+  ctx.fillRect(x + 6, armY + 2, 4, 2);
+  
+  // Right arm raised
+  ctx.fillStyle = PALETTE[9];
+  ctx.fillRect(x + 18, y + 15 - Math.floor(armRaise * 3), 4, 6 + Math.floor(armRaise * 2));
+  
+  // Head
+  const headX = x + 10 + Math.floor(headTilt);
+  const headY = y + 8;
+  ctx.fillStyle = PALETTE[11];
+  ctx.fillRect(headX, headY, 8, 8);
+  ctx.fillStyle = PALETTE[10];
+  ctx.fillRect(headX + 1, headY + 1, 6, 6);
+  
+  // Hat (pointed with bend)
+  ctx.fillStyle = PALETTE[12];
+  ctx.fillRect(headX - 2, headY - 6, 12, 8);
+  ctx.fillStyle = PALETTE[13];
+  ctx.fillRect(headX - 1, headY - 5, 10, 6);
+  // Hat point bend
+  ctx.fillStyle = PALETTE[14];
+  ctx.fillRect(headX + 2, headY - 10, 4, 5);
+  ctx.fillRect(headX + 4, headY - 12, 3, 3);
+  
+  // Beard
+  const beardY = headY + 7;
+  ctx.fillStyle = PALETTE[15];
+  ctx.fillRect(headX + 2, beardY, 4, 8);
+  ctx.fillStyle = PALETTE[16];
+  ctx.fillRect(headX + 3, beardY + 2, 2, 6);
+  ctx.fillStyle = PALETTE[17];
+  ctx.fillRect(headX + 2, beardY + 6, 4, 2);
+  
+  // Eyes (simple)
+  ctx.fillStyle = PALETTE[0];
+  ctx.fillRect(headX + 2, headY + 3, 1, 1);
+  ctx.fillRect(headX + 5, headY + 3, 1, 1);
+  
+  // Staff
+  const staffBaseX = x + 7;
+  const staffBaseY = y + 22;
+  const staffLen = 22;
+  
+  // Staff angle in radians, convert to pixel offset
+  const angle = staffAngle;
+  const endX = Math.floor(staffBaseX + Math.cos(angle) * staffLen);
+  const endY = Math.floor(staffBaseY + Math.sin(angle) * staffLen * 0.6);
+  
+  ctx.fillStyle = PALETTE[13];
+  // Staff body as thick line of rects
+  for (let i = 0; i < staffLen; i++) {
+    const t = i / staffLen;
+    const px = Math.floor(staffBaseX + Math.cos(angle) * i);
+    const py = Math.floor(staffBaseY + Math.sin(angle) * i * 0.6);
+    ctx.fillRect(px, py, 2, 2);
+  }
+  
+  // Gem at tip
+  const gemX = endX;
+  const gemY = endY - 1;
+  const gemColor = chargeLevel > 0.5 ? 20 : 19;
+  ctx.fillStyle = PALETTE[gemColor];
+  ctx.fillRect(gemX - 1, gemY - 1, 3, 3);
+  ctx.fillStyle = PALETTE[21];
+  ctx.fillRect(gemX, gemY, 1, 1);
+  
+  // Rim light from gem during charge/cast
+  if (chargeLevel > 0.2 || castFlash > 0) {
+    const rim = chargeLevel > 0.6 ? 22 : 18;
+    ctx.fillStyle = PALETTE[rim];
+    // 1px rim on right side of wizard
+    ctx.fillRect(x + 24, y + 10, 1, 20);
+    ctx.fillRect(x + 23, y + 12, 1, 16);
+  }
+  
+  // Cast flash burst
+  if (castFlash > 0) {
+    const flash = Math.floor(castFlash * 3);
+    ctx.fillStyle = PALETTE[21];
+    ctx.fillRect(gemX - flash, gemY - flash, flash * 2 + 1, flash * 2 + 1);
+  }
+}
+
+// Background
+function drawBackground(ctx, time) {
+  // Night sky
+  ctx.fillStyle = PALETTE[0];
+  ctx.fillRect(0, 0, 128, 88);
+  
+  // Gradient-ish layers
+  ctx.fillStyle = PALETTE[1];
+  ctx.fillRect(0, 0, 128, 30);
+  ctx.fillStyle = PALETTE[2];
+  ctx.fillRect(0, 20, 128, 20);
+  
+  // Moon
+  ctx.fillStyle = PALETTE[21];
+  ctx.fillRect(100, 12, 8, 8);
+  ctx.fillStyle = PALETTE[18];
+  ctx.fillRect(101, 13, 6, 6);
+  
+  // Twinkling stars (fixed positions + time)
+  const starPositions = [
+    [15, 8], [35, 15], [55, 5], [80, 20], [25, 35], [95, 40], [40, 50], [70, 12]
+  ];
+  for (let i = 0; i < starPositions.length; i++) {
+    const [sx, sy] = starPositions[i];
+    const twinkle = Math.sin(time * 0.008 + i) > 0.7 ? 21 : 18;
+    ctx.fillStyle = PALETTE[twinkle];
+    ctx.fillRect(sx, sy, 1, 1);
+  }
+}
+
+// State machine
+let state = 'IDLE';
+let stateTime = 0;
+let globalTime = 0;
+let projectile = { x: 0, y: 0, active: false, vx: 0 };
+
+let params = {
+  staffAngle: 1.2,
+  armRaise: 0,
+  headTilt: 0,
+  robeSway: 0,
+  chargeLevel: 0,
+  castFlash: 0
+};
+
+let targetParams = { ...params };
+
+function setState(newState) {
+  state = newState;
+  stateTime = 0;
+}
+
+function updateState() {
+  stateTime++;
+  globalTime++;
+  
+  // Target interpolation
+  const lerp = 0.15;
+  
+  // State machine
+  if (state === 'IDLE') {
+    if (stateTime > 120) setState('CHARGE');
+    
+    targetParams.staffAngle = 1.2;
+    targetParams.armRaise = Math.sin(globalTime * 0.08) * 0.8;
+    targetParams.headTilt = Math.sin(globalTime * 0.05) * 0.5;
+    targetParams.robeSway = Math.sin(globalTime * 0.06) * 1.5;
+    targetParams.chargeLevel = 0;
+    targetParams.castFlash = 0;
+    
+    // Idle bob
+    if (stateTime % 60 < 30) {
+      targetParams.armRaise += 0.3;
+    }
+  } 
+  else if (state === 'CHARGE') {
+    if (stateTime > 90) setState('CAST');
+    
+    const t = stateTime / 90;
+    targetParams.staffAngle = 1.2 + t * 0.8;
+    targetParams.armRaise = 3 + Math.sin(globalTime * 0.2) * 0.5;
+    targetParams.headTilt = -0.5;
+    targetParams.robeSway = Math.sin(globalTime * 0.15) * 0.8;
+    targetParams.chargeLevel = Math.min(1, t * 1.2);
+    targetParams.castFlash = 0;
+    
+    // Spawn charge sparks spiraling inward
+    if (stateTime % 3 === 0 && particleCount < MAX_PARTICLES - 8) {
+      const gemX = 32 + Math.cos(targetParams.staffAngle) * 18;
+      const gemY = 36 + Math.sin(targetParams.staffAngle) * 11;
+      const angle = (globalTime * 0.15) + (stateTime * 0.3);
+      const r = 12 + Math.sin(stateTime * 0.2) * 3;
+      const px = gemX + Math.cos(angle) * r;
+      const py = gemY + Math.sin(angle) * r * 0.7;
+      const vx = (gemX - px) * 0.12;
+      const vy = (gemY - py) * 0.12;
+      spawnParticle(px, py, vx, vy, 18, 22);
+    }
+  } 
+  else if (state === 'CAST') {
+    if (stateTime === 1) {
+      // Fire projectile
+      projectile.active = true;
+      projectile.x = 36;
+      projectile.y = 32;
+      projectile.vx = 3.2;
+      projectile.vy = -0.4;
+      
+      // Explosion burst
+      const gemX = 36;
+      const gemY = 30;
+      for (let i = 0; i < 18; i++) {
+        const angle = (i / 18) * Math.PI * 2;
+        const speed = 1.8 + Math.random() * 0.8;
+        spawnParticle(gemX, gemY, 
+          Math.cos(angle) * speed, 
+          Math.sin(angle) * speed * 0.7, 
+          22, 20);
+      }
+    }
+    
+    if (stateTime > 45) setState('RECOVER');
+    
+    targetParams.staffAngle = 2.0;
+    targetParams.armRaise = 4.5;
+    targetParams.headTilt = -0.8;
+    targetParams.robeSway = 2.5;
+    targetParams.chargeLevel = 0.3;
+    targetParams.castFlash = Math.max(0, 1 - (stateTime / 12));
+    
+    // Screen shake handled in render
+  } 
+  else if (state === 'RECOVER') {
+    if (stateTime > 60) setState('IDLE');
+    
+    const t = stateTime / 60;
+    targetParams.staffAngle = 2.0 - t * 0.8;
+    targetParams.armRaise = 4.5 - t * 4.5;
+    targetParams.headTilt = -0.8 + t * 0.8;
+    targetParams.robeSway = 2.5 - t * 2.5;
+    targetParams.chargeLevel = 0;
+    targetParams.castFlash = 0;
+  }
+  
+  // Apply lerp to params
+  params.staffAngle += (targetParams.staffAngle - params.staffAngle) * lerp;
+  params.armRaise += (targetParams.armRaise - params.armRaise) * lerp;
+  params.headTilt += (targetParams.headTilt - params.headTilt) * lerp;
+  params.robeSway += (targetParams.robeSway - params.robeSway) * lerp;
+  params.chargeLevel += (targetParams.chargeLevel - params.chargeLevel) * lerp;
+  params.castFlash += (targetParams.castFlash - params.castFlash) * lerp;
+  
+  // Quantize for pixel feel
+  params.staffAngle = Math.round(params.staffAngle * 10) / 10;
+  params.armRaise = Math.round(params.armRaise * 2) / 2;
+  params.headTilt = Math.round(params.headTilt * 2) / 2;
+  params.robeSway = Math.round(params.robeSway);
+  
+  // Update projectile
+  if (projectile.active) {
+    projectile.x += projectile.vx;
+    projectile.y += projectile.vy;
+    if (projectile.x > 120) projectile.active = false;
+    
+    // Trail particles
+    if (stateTime % 2 === 0 && particleCount < MAX_PARTICLES - 4) {
+      spawnParticle(projectile.x, projectile.y, -0.3, 0.1, 8, 23);
+    }
+  }
+  
+  updateParticles();
+}
+
+let shakeX = 0;
+let shakeY = 0;
+
+function render() {
+  const off = offscreen;
+  const ctx = off.getContext('2d', { alpha: false });
+  ctx.imageSmoothingEnabled = false;
+  
+  // Clear
+  ctx.fillStyle = PALETTE[0];
+  ctx.fillRect(0, 0, LOGICAL_W, LOGICAL_H);
+  
+  drawBackground(ctx, globalTime);
+  
+  // Wizard position (centered-ish)
+  const wizardX = 52;
+  const wizardY = 38;
+  
+  // Apply shake only during CAST
+  let drawX = wizardX;
+  let drawY = wizardY;
+  if (state === 'CAST' && stateTime < 12) {
+    shakeX = (Math.random() - 0.5) * 3;
+    shakeY = (Math.random() - 0.5) * 2;
+    drawX += Math.floor(shakeX);
+    drawY += Math.floor(shakeY);
+  } else {
+    shakeX = 0;
+    shakeY = 0;
+  }
+  
+  drawWizard(ctx, drawX, drawY, params);
+  
+  // Draw projectile
+  if (projectile.active) {
+    ctx.fillStyle = PALETTE[20];
+    ctx.fillRect(Math.floor(projectile.x), Math.floor(projectile.y), 3, 2);
+    ctx.fillStyle = PALETTE[21];
+    ctx.fillRect(Math.floor(projectile.x) + 1, Math.floor(projectile.y), 1, 1);
+  }
+  
+  drawParticles(ctx);
+  
+  // Blit to display
+  const dctx = display.getContext('2d', { alpha: false });
+  dctx.imageSmoothingEnabled = false;
+  
+  const scale = Math.floor(Math.min(
+    window.innerWidth / LOGICAL_W,
+    window.innerHeight / LOGICAL_H
+  ));
+  
+  const drawW = LOGICAL_W * scale;
+  const drawH = LOGICAL_H * scale;
+  const offsetX = Math.floor((window.innerWidth - drawW) / 2);
+  const offsetY = Math.floor((window.innerHeight - drawH) / 2);
+  
+  dctx.fillStyle = '#000000';
+  dctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+  
+  dctx.drawImage(off, 0, 0, LOGICAL_W, LOGICAL_H, offsetX, offsetY, drawW, drawH);
+}
+
+// Setup
+const display = document.getElementById('display');
+const offscreen = document.createElement('canvas');
+offscreen.width = LOGICAL_W;
+offscreen.height = LOGICAL_H;
+
+function resize() {
+  display.width = window.innerWidth;
+  display.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// Main loop - fixed 60hz feel
+let lastFrame = performance.now();
+let accumulator = 0;
+const STEP = 1000 / 60;
+
+function gameLoop(now) {
+  accumulator += now - lastFrame;
+  lastFrame = now;
+  
+  while (accumulator >= STEP) {
+    updateState();
+    accumulator -= STEP;
+  }
+  
+  render();
+  requestAnimationFrame(gameLoop);
+}
+
+// Boot
+setState('IDLE');
+requestAnimationFrame(gameLoop);
+
+// Easter egg: click to force cast
+display.addEventListener('click', () => {
+  if (state === 'IDLE' || state === 'RECOVER') {
+    setState('CHARGE');
+  }
+});
+
+console.log('%c[grok43hermes] Pixel wizard ready. Click canvas to cast.', 'color:#4a4a9a');
+</script>
+</body>
+</html>
